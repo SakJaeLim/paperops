@@ -84,10 +84,15 @@ dist/
 """
 
 
+def release_files(base):
+    return [p for p in base.rglob('*')
+            if p.is_file() and '.git' not in p.parts]
+
+
 def sanitize_scan(base):
     issues = []
-    for path in base.rglob('*'):
-        if not path.is_file() or path.suffix.lower() not in TEXT_SUFFIXES:
+    for path in release_files(base):
+        if path.suffix.lower() not in TEXT_SUFFIXES:
             continue
         try:
             text = path.read_text(encoding='utf-8', errors='ignore')
@@ -152,7 +157,7 @@ def main():
         print('ERROR: dist/public_release does not exist; run without --check first')
         raise SystemExit(1)
     issues = sanitize_scan(DIST)
-    n_files = sum(1 for p in DIST.rglob('*') if p.is_file())
+    n_files = len(release_files(DIST))
     print(f'release_dir={DIST}')
     print(f'file_count={n_files}')
     print(f'sanitize_issues={len(issues)}')

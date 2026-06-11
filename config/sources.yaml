@@ -1,0 +1,25 @@
+user_agent: "PaperOps/0.1 (mailto:your-email@example.com)"
+openalex_mailto: "your-email@example.com"
+semantic_scholar_api_key: ""
+
+sources:
+  arxiv:
+    enabled: true
+    max_results_per_query: 25
+  openalex:
+    enabled: true
+    max_results_per_query: 25
+  crossref:
+    enabled: true
+    max_results_per_query: 25
+  semantic_scholar:
+    enabled: true
+    max_results_per_query: 25
+
+rate_limits:
+  sleep_seconds_between_requests: 1.0
+
+pdf:
+  download_enabled: true
+  overwrite_existing: false
+  min_score_for_download: 0.35

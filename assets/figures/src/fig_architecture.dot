@@ -1,0 +1,28 @@
+digraph fig_architecture {
+  graph [fontname="Helvetica", fontsize=11, rankdir=TB, splines=ortho, nodesep=0.45, ranksep=0.55, pad=0.2];
+  node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor="#F4F4F2", color="#555555", margin="0.18,0.10"];
+  edge [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.7];
+  cli [label="PaperOps CLI\n(scripts/paperops.py)"];
+  subgraph cluster_ext {
+    label="External services"; style=dashed; color="#999999";
+    grobid [label="GROBID\n(Docker)"];
+    zotero [label="Zotero +\nBetter BibTeX"];
+    apis [label="Paper APIs\n(arXiv, S2, OpenAlex)"];
+  }
+  subgraph cluster_store {
+    label="Local stores"; style=dashed; color="#999999";
+    db [label="papers.sqlite", shape=cylinder, fillcolor="#EAF4EA"];
+    matrices [label="matrices/\n(evidence, screening, gap)", shape=cylinder, fillcolor="#EAF4EA"];
+    manuscript [label="05_manuscript/\n(Quarto)", shape=cylinder, fillcolor="#EAF4EA"];
+    reports [label="reports/\n(audit, review, figures)", shape=cylinder, fillcolor="#EAF4EA"];
+  }
+  config [label="config/\n(sources, scoring, prompts)", shape=folder];
+  cli -> apis [dir=both];
+  cli -> grobid [dir=both];
+  cli -> zotero [dir=both];
+  cli -> db [dir=both];
+  cli -> matrices [dir=both];
+  cli -> manuscript [label="guarded\napply only"];
+  cli -> reports;
+  config -> cli;
+}

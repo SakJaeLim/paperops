@@ -1,0 +1,12 @@
+defaults:
+  collection_limit: 30
+  digest_top_n: 25
+  card_limit: 25
+  parse_max_pages: 80
+
+paths:
+  database: data/metadata/papers.sqlite
+  evidence_matrix: matrices/evidence_matrix.csv
+  comparison_matrix: matrices/comparison_matrix.csv
+  gap_matrix: matrices/gap_matrix.csv
+  manuscript: manuscript/main.md

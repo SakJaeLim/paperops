@@ -1,0 +1,13 @@
+flowchart LR
+  A[Collect<br/>arXiv / Semantic Scholar / OpenAlex] --> B[Score & Screen]
+  B --> C[PDF Download]
+  C --> D[GROBID Parse]
+  D --> E[Evidence Candidate Extraction]
+  E --> F{{Human Review}}
+  F -->|promote| G[(Evidence Matrix)]
+  G --> H[Manuscript Patch Preview + Diff]
+  H --> I{{Human Approval}}
+  I --> J[Guarded Apply<br/>backup + LF write]
+  J --> K[(Thesis Manuscript)]
+  J -.post-check.-> L[Guards<br/>no-auto-verified, smoke-test]
+  L -.audit.-> G

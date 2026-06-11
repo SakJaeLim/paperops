@@ -1,0 +1,9 @@
+flowchart LR
+  A[Evidence Candidate<br/>claim + quote + location] --> B[Structural Validation]
+  B --> C[Source Alignment<br/>quote match, page locate]
+  C --> D[(Review Queue)]
+  D --> E{{Human Decision}}
+  E --> F[(Promoted Row<br/>verified=false)]
+  F --> G[PDF Page Check]
+  G --> H{{Human Verification Gate}}
+  H --> I[verified=true<br/>manual only]

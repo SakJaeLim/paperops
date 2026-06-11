@@ -1,0 +1,80 @@
+profile_name: ontology_research_agent
+main_topic: "Ontology, knowledge graph, semantic web, and AI-assisted literature review / academic writing workflows"
+
+language:
+  notes: ko
+  manuscript: en
+  summaries: ko
+
+keywords:
+  core:
+    - ontology
+    - ontologies
+    - knowledge graph
+    - knowledge graphs
+    - semantic web
+    - linked data
+    - RDF
+    - OWL
+    - SPARQL
+    - SKOS
+    - taxonomy
+    - metadata schema
+  method:
+    - literature review automation
+    - systematic literature review
+    - research assistant
+    - academic writing
+    - scientific writing
+    - paper recommendation
+    - citation recommendation
+    - evidence extraction
+    - retrieval augmented generation
+    - research agent
+    - AI scientist
+  application:
+    - knowledge organization
+    - scholarly knowledge graph
+    - research workflow
+    - document intelligence
+    - scientific discovery
+  exclude:
+    - SEO article
+    - marketing knowledge graph
+    - purely clinical ontology without reusable methodology
+    - non-academic blog post
+    - cryptocurrency ontology
+
+target_outputs:
+  - daily_digest
+  - paper_card
+  - evidence_matrix
+  - comparison_matrix
+  - gap_matrix
+  - related_work
+  - manuscript_outline
+
+preferred_venues:
+  - Semantic Web Journal
+  - Journal of Web Semantics
+  - ISWC
+  - ESWC
+  - WWW
+  - The Web Conference
+  - ACL
+  - EMNLP
+  - NAACL
+  - SIGIR
+  - CHI
+  - JCDL
+  - arXiv
+
+query_groups:
+  - name: ontology_core
+    query: "ontology knowledge graph semantic web RDF OWL SPARQL"
+  - name: literature_review_automation
+    query: "automated literature review research assistant academic writing citation evidence extraction"
+  - name: scholarly_kg
+    query: "scholarly knowledge graph scientific literature ontology"
+  - name: research_agent
+    query: "AI research agent paper writing scientific discovery literature review"

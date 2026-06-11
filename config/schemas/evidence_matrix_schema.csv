@@ -1,0 +1,15 @@
+column,required,description,example
+paper_id,yes,내부 논문 ID,arxiv_2401_12345
+citekey,yes,BibTeX citekey,smith2024ontology
+claim_type,yes,background/method/limitation/gap/result 등,limitation
+claim,yes,내 논문에 쓸 수 있는 주장,Existing ontology construction methods require substantial manual effort.
+quote,no,원문 근거 문장,Ontology engineering remains labor-intensive...
+page,no,PDF 페이지,5
+section,no,논문 섹션,Discussion
+confidence,yes,high/medium/low,medium
+use_in_section,no,intro/related_work/method/discussion,related_work
+my_comment,no,내 해석 또는 사용 계획,수작업 한계 설명에 사용
+verified,yes,사람 검토 여부,false
+source_file,no,근거가 추출된 파일 경로,data/parsed/example.json
+created_at,yes,생성 시간,2026-05-24T16:00:00
+updated_at,yes,수정 시간,2026-05-24T16:00:00

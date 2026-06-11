@@ -1,0 +1,18 @@
+weights:
+  topic_relevance: 0.35
+  title_signal: 0.20
+  recency: 0.15
+  citation_signal: 0.15
+  venue_signal: 0.10
+  open_access_signal: 0.05
+  exclusion_penalty: 0.25
+
+thresholds:
+  candidate: 0.35
+  to_read: 0.55
+  important: 0.75
+
+recency:
+  current_year: 2026
+  full_score_years: 3
+  half_life_years: 8

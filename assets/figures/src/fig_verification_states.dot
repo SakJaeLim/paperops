@@ -1,0 +1,19 @@
+digraph fig_verification_states {
+  graph [fontname="Helvetica", fontsize=11, rankdir=LR, splines=ortho, nodesep=0.45, ranksep=0.55, pad=0.2];
+  node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor="#F4F4F2", color="#555555", margin="0.18,0.10"];
+  edge [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.7];
+  extracted [label="extracted"];
+  validated [label="candidate\nvalidated"];
+  in_review [label="in review", fillcolor="#FFE9C7"];
+  promoted [label="promoted\n(verified=false)", shape=cylinder, fillcolor="#EAF4EA"];
+  pdf_check [label="pdf check\nrequired"];
+  verified [label="verified=true", fillcolor="#DCE9F7"];
+  rejected [label="rejected", fillcolor="#F7DCDC"];
+  extracted -> validated -> in_review;
+  in_review -> promoted [label="human keep"];
+  in_review -> rejected [label="human reject"];
+  promoted -> pdf_check;
+  pdf_check -> verified [label="human only", penwidth=2];
+  promoted -> verified [style=invis];
+  noauto [label="no automated edge\ninto verified", shape=note, fillcolor="#FFF7D6"];
+}

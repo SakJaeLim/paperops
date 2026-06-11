@@ -1,0 +1,27 @@
+digraph fig_evidence_flow {
+  graph [fontname="Helvetica", fontsize=11, rankdir=TB, splines=ortho, nodesep=0.45, ranksep=0.55, pad=0.2];
+  node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor="#F4F4F2", color="#555555", margin="0.18,0.10"];
+  edge [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.7];
+  cand [label="Evidence Candidate\n(claim + quote + location)"];
+  valid [label="Structural Validation\n(schema, citekey)"];
+  align [label="Source Alignment\n(quote match, page locate)"];
+  queue [label="Review Queue", shape=cylinder, fillcolor="#EAF4EA"];
+  human [label="Human Decision\n(keep / revise / reject)", fillcolor="#FFE9C7"];
+  promoted [label="Promoted Row\nverified=false", shape=cylinder, fillcolor="#EAF4EA"];
+  pdfcheck [label="PDF Page Check\n(required for high-risk)"];
+  verify [label="Human Verification\nGate", fillcolor="#FFE9C7"];
+  verified [label="verified=true\n(manual only)", fillcolor="#DCE9F7"];
+  align_note [label="alignment != truth validation", shape=note, fillcolor="#FFF7D6"];
+  { rank=same; cand; valid; align; queue; human; }
+  { rank=same; align_note; verified; verify; pdfcheck; promoted; }
+  cand -> valid -> align -> queue -> human [constraint=false];
+  // invisible vertical pins keep row 2 folded under row 1
+  cand -> align_note [style=invis];
+  valid -> verified [style=invis];
+  align -> verify [style=invis];
+  queue -> pdfcheck [style=invis];
+  human -> promoted [label="promote"];
+  promoted -> pdfcheck [constraint=false];
+  pdfcheck -> verify [constraint=false];
+  verify -> verified [constraint=false];
+}

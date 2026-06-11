@@ -1,0 +1,9 @@
+flowchart TB
+  A[Patch Preview<br/>CSV + MD + diff] --> B{{Human Diff Review}}
+  B -->|approved| C[Backup Chapters]
+  B -.rejected / revise.-> A
+  C --> D[Apply<br/>SHA-checked, LF write]
+  D --> E[guard-no-auto-verified<br/>+ smoke-test]
+  E -->|pass| F[(Apply Report)]
+  E -.fail.-> G[Rollback from Backup]
+  G -.-> A

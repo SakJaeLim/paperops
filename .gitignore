@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+data/
+logs/
+matrices/
+notes/
+reports/
+05_manuscript/
+manuscript/
+dist/
+*.sqlite*
+*.pdf
+*.zip
+*.tmp
+*.bak

@@ -1,0 +1,29 @@
+digraph fig_pipeline {
+  graph [fontname="Helvetica", fontsize=11, rankdir=TB, splines=ortho, nodesep=0.45, ranksep=0.55, pad=0.2];
+  node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor="#F4F4F2", color="#555555", margin="0.18,0.10"];
+  edge [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.7];
+  collect [label="Collect\n(arXiv / S2 / OpenAlex)"];
+  screen [label="Score & Screen"];
+  pdf [label="PDF Download"];
+  grobid [label="GROBID Parse"];
+  extract [label="Evidence Candidate\nExtraction"];
+  review [label="Human Review\n(review queue)", fillcolor="#FFE9C7"];
+  matrix [label="Evidence Matrix\n(promoted rows)", shape=cylinder, fillcolor="#EAF4EA"];
+  preview [label="Manuscript Patch\nPreview + Diff"];
+  approve [label="Human Approval", fillcolor="#FFE9C7"];
+  apply [label="Guarded Apply\n(backup + LF write)"];
+  guard [label="Guards\n(no-auto-verified, smoke-test)", fillcolor="#DCE9F7"];
+  thesis [label="Thesis Manuscript\n(Quarto)", shape=cylinder, fillcolor="#EAF4EA"];
+  subgraph cluster_auto {
+    label="Automated collection & extraction"; style=dashed; color="#999999";
+    collect -> screen -> pdf -> grobid -> extract;
+  }
+  subgraph cluster_gov {
+    label="Governed review & writing"; style=dashed; color="#999999";
+    review -> matrix [label="promote"];
+    matrix -> preview -> approve -> apply -> thesis;
+  }
+  extract -> review;
+  apply -> guard [style=dashed, label="post-check"];
+  guard -> matrix [style=dashed, label="audit", constraint=false];
+}

@@ -1,0 +1,19 @@
+digraph fig_guarded_apply {
+  graph [fontname="Helvetica", fontsize=11, rankdir=TB, splines=ortho, nodesep=0.45, ranksep=0.55, pad=0.2];
+  node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor="#F4F4F2", color="#555555", margin="0.18,0.10"];
+  edge [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.7];
+  preview [label="Patch Preview\n(CSV + MD + diff)"];
+  review [label="Human Diff Review", fillcolor="#FFE9C7"];
+  backup [label="Backup Chapters"];
+  apply [label="Apply\n(SHA-checked, LF write)"];
+  postguard [label="guard-no-auto-verified\n+ smoke-test", fillcolor="#DCE9F7"];
+  report [label="Apply Report", shape=cylinder, fillcolor="#EAF4EA"];
+  rollback [label="Rollback from Backup", fillcolor="#F7DCDC"];
+  preview -> review;
+  review -> backup [label="approved"];
+  review -> preview [label="rejected / revise", style=dashed];
+  backup -> apply -> postguard;
+  postguard -> report [label="pass"];
+  postguard -> rollback [label="fail", style=dashed];
+  rollback -> preview [style=dashed];
+}

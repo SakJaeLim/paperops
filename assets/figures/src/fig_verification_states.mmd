@@ -1,0 +1,9 @@
+stateDiagram-v2
+  [*] --> extracted
+  extracted --> validated
+  validated --> in_review
+  in_review --> promoted : human keep
+  in_review --> rejected : human reject
+  promoted --> pdf_check
+  pdf_check --> verified : human only
+  note right of verified : no automated transition

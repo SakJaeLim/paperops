@@ -1,0 +1,21 @@
+flowchart TB
+  CLI[PaperOps CLI<br/>scripts/paperops.py]
+  subgraph External services
+    G[GROBID Docker]
+    Z[Zotero + Better BibTeX]
+    A[Paper APIs<br/>arXiv, S2, OpenAlex]
+  end
+  subgraph Local stores
+    DB[(papers.sqlite)]
+    M[(matrices/)]
+    MS[(05_manuscript/)]
+    R[(reports/)]
+  end
+  CFG[config/] --> CLI
+  CLI <--> A
+  CLI <--> G
+  CLI <--> Z
+  CLI <--> DB
+  CLI <--> M
+  CLI -->|guarded apply only| MS
+  CLI --> R

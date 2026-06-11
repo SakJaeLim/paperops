@@ -25,11 +25,17 @@ WHITELIST_FILES = [
     ('scripts/paperops.py', 'scripts/paperops.py'),
     ('scripts/paperops_extra.py', 'scripts/paperops_extra.py'),
     ('scripts/paperops_figures.py', 'scripts/paperops_figures.py'),
+    ('scripts/paperops_draft_audit.py', 'scripts/paperops_draft_audit.py'),
     ('scripts/build_public_release.py', 'scripts/build_public_release.py'),
     ('requirements.txt', 'requirements.txt'),
     ('pyproject.toml', 'pyproject.toml'),
     ('run_paperops.bat', 'run_paperops.bat'),
     ('README_PUBLIC.md', 'README.md'),
+    ('README_PUBLIC.ko.md', 'README.ko.md'),
+    ('README_PUBLIC.zh.md', 'README.zh.md'),
+    ('README_PUBLIC.ja.md', 'README.ja.md'),
+    ('README_PUBLIC.fr.md', 'README.fr.md'),
+    ('README_PUBLIC.ar.md', 'README.ar.md'),
     ('LICENSE', 'LICENSE'),
     ('docs/00_MASTER_DESIGN.md', 'docs/00_MASTER_DESIGN.md'),
     ('docs/01_MVP_ROADMAP.md', 'docs/01_MVP_ROADMAP.md'),
@@ -95,8 +101,15 @@ def sanitize_scan(base):
 
 def build():
     if DIST.exists():
-        shutil.rmtree(DIST)
-    DIST.mkdir(parents=True)
+        # Preserve .git so the release repo keeps its remote/history.
+        for child in DIST.iterdir():
+            if child.name == '.git':
+                continue
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+    DIST.mkdir(parents=True, exist_ok=True)
     missing = []
     for src, dst in WHITELIST_FILES:
         s = ROOT / src

@@ -5169,6 +5169,11 @@ def main():
         paperops_figures.register_subcommands(sub)
     except Exception as e:
         print(f'[warn] figure commands unavailable: {e}', file=sys.stderr)
+    try:
+        import paperops_draft_audit
+        paperops_draft_audit.register_subcommands(sub)
+    except Exception as e:
+        print(f'[warn] draft audit command unavailable: {e}', file=sys.stderr)
     args=ap.parse_args(); args.func(args)
 
 if __name__ == '__main__': main()

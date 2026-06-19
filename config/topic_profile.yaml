@@ -1,9 +1,9 @@
-profile_name: ontology_research_agent
-main_topic: "Ontology, knowledge graph, semantic web, and AI-assisted literature review / academic writing workflows"
+profile_name: ax_ontology_governance_research
+main_topic: "Ontology-based AX operating model and generative AI governance, security, and decision automation"
 
 language:
   notes: ko
-  manuscript: en
+  manuscript: ko
   summaries: ko
 
 keywords:
@@ -13,37 +13,68 @@ keywords:
     - knowledge graph
     - knowledge graphs
     - semantic web
-    - linked data
     - RDF
     - OWL
+    - SHACL
     - SPARQL
-    - SKOS
-    - taxonomy
-    - metadata schema
+    - property graph
+    - Neo4j
+    - operational ontology
+    - enterprise ontology
   method:
-    - literature review automation
-    - systematic literature review
-    - research assistant
-    - academic writing
-    - scientific writing
-    - paper recommendation
-    - citation recommendation
-    - evidence extraction
+    - GraphRAG
     - retrieval augmented generation
-    - research agent
-    - AI scientist
+    - agentic workflow
+    - AI agent
+    - multi-agent system
+    - decision automation
+    - decision support system
+    - workflow automation
+    - policy-as-code
+    - rule-based reasoning
+    - explainable AI
+    - traceability
+    - lineage
+    - auditability
+    - human-in-the-loop
+  governance_security:
+    - generative AI governance
+    - AI governance
+    - LLM governance
+    - AI risk management
+    - model risk management
+    - AI security
+    - LLM security
+    - prompt injection
+    - data leakage
+    - access control
+    - attribute-based access control
+    - guardrails
+    - compliance automation
+    - trustworthy AI
+    - responsible AI
   application:
-    - knowledge organization
-    - scholarly knowledge graph
-    - research workflow
-    - document intelligence
-    - scientific discovery
+    - AX transformation
+    - digital transformation
+    - enterprise AI platform
+    - AI operating model
+    - AI operations
+    - MLOps
+    - LLMOps
+    - AIOps
+    - enterprise architecture
+    - information systems planning
+    - public sector AI
+    - financial AI governance
   exclude:
-    - SEO article
-    - marketing knowledge graph
-    - purely clinical ontology without reusable methodology
-    - non-academic blog post
+    - purely philosophical ontology
+    - biomedical ontology only
     - cryptocurrency ontology
+    - SEO knowledge graph
+    - marketing knowledge graph
+    - non-academic blog post
+    - AI art prompt
+    - pure chatbot tutorial without governance or evaluation
 
 target_outputs:
   - daily_digest
@@ -53,28 +84,41 @@ target_outputs:
   - gap_matrix
   - related_work
   - manuscript_outline
+  - governance_framework
+  - security_control_matrix
+  - decision_automation_architecture
 
 preferred_venues:
   - Semantic Web Journal
   - Journal of Web Semantics
   - ISWC
   - ESWC
-  - WWW
   - The Web Conference
+  - WWW
   - ACL
   - EMNLP
   - NAACL
   - SIGIR
   - CHI
-  - JCDL
+  - IEEE Access
+  - ACM Computing Surveys
+  - Information Systems Frontiers
+  - Decision Support Systems
+  - Expert Systems with Applications
+  - Computers & Security
+  - IEEE Security & Privacy
   - arXiv
 
 query_groups:
-  - name: ontology_core
-    query: "ontology knowledge graph semantic web RDF OWL SPARQL"
-  - name: literature_review_automation
-    query: "automated literature review research assistant academic writing citation evidence extraction"
-  - name: scholarly_kg
-    query: "scholarly knowledge graph scientific literature ontology"
-  - name: research_agent
-    query: "AI research agent paper writing scientific discovery literature review"
+  - name: operational_ontology_ax
+    query: "operational ontology enterprise knowledge graph AI operating model digital transformation decision automation"
+  - name: ontology_graphrag_governance
+    query: "ontology knowledge graph GraphRAG generative AI governance traceability auditability"
+  - name: llm_governance_security
+    query: "LLM governance generative AI security prompt injection data leakage guardrails access control"
+  - name: decision_automation_policy_reasoning
+    query: "decision automation policy as code rule based reasoning ontology explainable AI human in the loop"
+  - name: enterprise_ai_operations
+    query: "enterprise AI platform LLMOps MLOps AI governance risk management compliance automation"
+  - name: public_financial_ai_governance
+    query: "public sector AI governance financial AI governance model risk management trustworthy AI"

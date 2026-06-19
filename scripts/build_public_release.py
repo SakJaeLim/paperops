@@ -32,6 +32,8 @@ WHITELIST_FILES = [
     ('run_paperops.bat', 'run_paperops.bat'),
     ('README.md', 'README.md'),
     ('README.ko.md', 'README.ko.md'),
+    ('README.de.md', 'README.de.md'),
+    ('README.es.md', 'README.es.md'),
     ('README.zh.md', 'README.zh.md'),
     ('README.ja.md', 'README.ja.md'),
     ('README.fr.md', 'README.fr.md'),

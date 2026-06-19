@@ -1,3 +1,4 @@
 @echo off
-cd /d "F:\05. assist\논문AGENT"
+cd /d "%~dp0"
 python scripts\paperops.py %*
+

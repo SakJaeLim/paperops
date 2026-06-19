@@ -89,7 +89,7 @@ def cmd_export_bib(args):
         if r['doi']: lines.append(f"  doi = {{{r['doi']}}},")
         if r['url']: lines.append(f"  url = {{{r['url']}}},")
         lines.append('}\n')
-    out.write_text('\n'.join(lines),encoding='utf-8'); log(f'BibTeX export 완료: {out}, {len(rows)}건')
+    out.parent.mkdir(parents=True,exist_ok=True); out.write_text('\n'.join(lines),encoding='utf-8'); log(f'BibTeX export 완료: {out}, {len(rows)}건')
     print(out)
 
 def cmd_weekly(args):
@@ -119,7 +119,7 @@ def cmd_draft_related(args):
         if any(k in title for k in ['review','research','writing','agent','citation','literature']):
             lines.append(f"- {r['title']} contributes to this area @{r['citekey']} [NEEDS_VERIFICATION].\n")
     lines.append('\n## 2.3 Gap Summary\n- Existing work is fragmented across paper discovery, reading, evidence extraction, and writing support. [NEEDS_SOURCE]\n- The proposed PaperOps pipeline focuses on evidence-first integration rather than isolated automation. [NEEDS_SOURCE]\n')
-    out.write_text('\n'.join(lines),encoding='utf-8'); log(f'Related Work 초안 생성: {out}')
+    out.parent.mkdir(parents=True,exist_ok=True); out.write_text('\n'.join(lines),encoding='utf-8'); log(f'Related Work 초안 생성: {out}')
     print(out)
 
 def cmd_reviewer(args):
@@ -147,14 +147,14 @@ def cmd_reviewer(args):
 4. citation audit 재실행
 5. 최신 논문 누락 여부 점검
 '''
-    out.write_text(report,encoding='utf-8'); log(f'Reviewer Report 생성: {out}')
+    out.parent.mkdir(parents=True,exist_ok=True); out.write_text(report,encoding='utf-8'); log(f'Reviewer Report 생성: {out}')
     print(out)
 
 def cmd_index(args):
     out=ROOT/'INDEX.md'
     files=['README.md','docs/00_MASTER_DESIGN.md','docs/01_MVP_ROADMAP.md','docs/02_PIPELINE_SPEC.md','docs/08_ENHANCEMENT_REPORT_'+today()+'.md','reports/daily_digest/digest_'+today()+'.md','reports/weekly_review/weekly_review_'+today()+'.md','reports/survey_reports/outline_'+today()+'.md','reports/survey_reports/gap_map_'+today()+'.md','reports/survey_reports/thesis_brief_'+today()+'.md','reports/audit_reports/reviewer_report_'+today()+'.md','matrices/evidence_matrix.csv','matrices/screening_matrix.csv','matrices/gap_matrix.csv','research_design/problem_definition.md','research_design/research_questions.md','research_design/artifact_definition.md','research_design/evaluation_plan.md','manuscript/main.md','manuscript/sections/02_related_work.md']
     lines=['# 논문AGENT 산출물 인덱스\n']+[f'- [{f}]({f})\n' for f in files if (ROOT/f).exists()]
-    out.write_text('\n'.join(lines),encoding='utf-8'); log(f'INDEX 생성: {out}')
+    out.parent.mkdir(parents=True,exist_ok=True); out.write_text('\n'.join(lines),encoding='utf-8'); log(f'INDEX 생성: {out}')
     print(out)
 
 def main():

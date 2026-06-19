@@ -1,6 +1,19 @@
 # PaperOps — 证据优先的研究与论文写作操作系统
 
-[English](README.md) | [한국어](README.ko.md) | **中文** | [日本語](README.ja.md) | [Français](README.fr.md) | [العربية](README.ar.md)
+<details align="right">
+  <summary>🌐 Language Translation / 选择语言</summary>
+  <br />
+  <p>
+    <a href="README.md">🇬🇧 English</a> | 
+    <a href="README.ko.md">🇰🇷 한국어</a> | 
+    <a href="README.de.md">🇩🇪 Deutsch</a> | 
+    <a href="README.es.md">🇪🇸 Español</a> | 
+    **🇨🇳 中文** | 
+    <a href="README.ja.md">🇯🇵 日本語</a> | 
+    <a href="README.fr.md">🇫🇷 Français</a> | 
+    <a href="README.ar.md">🇸🇦 العربية</a>
+  </p>
+</details>
 
 ![PaperOps 端到端流水线](assets/figures/fig_pipeline.svg)
 

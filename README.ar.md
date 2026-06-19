@@ -1,6 +1,19 @@
 # PaperOps — نظام تشغيل للبحث وكتابة الأطروحات قائم على الأدلة أولاً
 
-[English](README.md) | [한국어](README.ko.md) | [中文](README.zh.md) | [日本語](README.ja.md) | [Français](README.fr.md) | **العربية**
+<details align="right">
+  <summary>🌐 Language Translation / اختيار اللغة</summary>
+  <br />
+  <p>
+    <a href="README.md">🇬🇧 English</a> | 
+    <a href="README.ko.md">🇰🇷 한국어</a> | 
+    <a href="README.de.md">🇩🇪 Deutsch</a> | 
+    <a href="README.es.md">🇪🇸 Español</a> | 
+    <a href="README.zh.md">🇨🇳 中文</a> | 
+    <a href="README.ja.md">🇯🇵 日本語</a> | 
+    <a href="README.fr.md">🇫🇷 Français</a> | 
+    **🇸🇦 العربية**
+  </p>
+</details>
 
 ![خط أنابيب PaperOps من البداية إلى النهاية](assets/figures/fig_pipeline.svg)
 

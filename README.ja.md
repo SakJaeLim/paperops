@@ -1,6 +1,19 @@
 # PaperOps — エビデンス・ファーストの研究・論文執筆OS
 
-[English](README.md) | [한국어](README.ko.md) | [中文](README.zh.md) | **日本語** | [Français](README.fr.md) | [العربية](README.ar.md)
+<details align="right">
+  <summary>🌐 Language Translation / 言語選択</summary>
+  <br />
+  <p>
+    <a href="README.md">🇬🇧 English</a> | 
+    <a href="README.ko.md">🇰🇷 한국어</a> | 
+    <a href="README.de.md">🇩🇪 Deutsch</a> | 
+    <a href="README.es.md">🇪🇸 Español</a> | 
+    <a href="README.zh.md">🇨🇳 中文</a> | 
+    **🇯🇵 日本語** | 
+    <a href="README.fr.md">🇫🇷 Français</a> | 
+    <a href="README.ar.md">🇸🇦 العربية</a>
+  </p>
+</details>
 
 ![PaperOps エンドツーエンド・パイプライン](assets/figures/fig_pipeline.svg)
 

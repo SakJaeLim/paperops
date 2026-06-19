@@ -1,6 +1,19 @@
 # PaperOps — OS de recherche et de rédaction de thèse « evidence-first »
 
-[English](README.md) | [한국어](README.ko.md) | [中文](README.zh.md) | [日本語](README.ja.md) | **Français** | [العربية](README.ar.md)
+<details align="right">
+  <summary>🌐 Language Translation / Sélection de la langue</summary>
+  <br />
+  <p>
+    <a href="README.md">🇬🇧 English</a> | 
+    <a href="README.ko.md">🇰🇷 한국어</a> | 
+    <a href="README.de.md">🇩🇪 Deutsch</a> | 
+    <a href="README.es.md">🇪🇸 Español</a> | 
+    <a href="README.zh.md">🇨🇳 中文</a> | 
+    <a href="README.ja.md">🇯🇵 日本語</a> | 
+    **🇫🇷 Français** | 
+    <a href="README.ar.md">🇸🇦 العربية</a>
+  </p>
+</details>
 
 ![Pipeline PaperOps de bout en bout](assets/figures/fig_pipeline.svg)
 

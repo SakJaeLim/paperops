@@ -34,7 +34,6 @@ DIST = ROOT / 'dist/public_release'
 # (source, destination-inside-release)
 WHITELIST_FILES = [
     ('scripts/paperops.py', 'scripts/paperops.py'),
-    ('scripts/paperops_extra.py', 'scripts/paperops_extra.py'),
     ('scripts/paperops_figures.py', 'scripts/paperops_figures.py'),
     ('scripts/paperops_draft_audit.py', 'scripts/paperops_draft_audit.py'),
     ('scripts/build_public_release.py', 'scripts/build_public_release.py'),

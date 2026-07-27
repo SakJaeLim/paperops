@@ -18,26 +18,31 @@
 ![Pipeline PaperOps de bout en bout](assets/figures/fig_pipeline.svg)
 
 PaperOps automatise **l'ensemble du cycle de vie de la rédaction scientifique**
-— collecte de littérature, tri, analyse de PDF, extraction de preuves,
+— collecte de littérature, tri, analyse de PDF, extraction de preuves
+(heuristique et assistée par LLM avec contrôle mot pour mot des citations),
 synchronisation bibliographique, édition de manuscrit sous garde-fous,
-génération de figures reproductibles et audit de brouillons — via une seule
-CLI locale comptant **plus de 45 commandes**.
+génération de figures reproductibles et audit de brouillons avec recoupement
+numérique face aux sorties d'expériences — via une seule CLI locale comptant
+**plus de 50 commandes**.
 
 Ce n'est *pas* un rédacteur automatique d'articles. Le pipeline est
 automatisé, mais trois points de jugement sont délibérément réservés à
 l'humain : l'adoption des preuves, l'approbation des modifications du
-manuscrit et la décision `verified=true`. Des garde-fous empêchent toute
-étape automatisée de les falsifier.
+manuscrit et la décision `verified=true`. L'état `verified=true` ne peut être
+atteint que par la commande `verify-evidence`, avec une attestation humaine
+explicite consignée dans un registre de vérification que
+`guard-no-auto-verified` recoupe — modifications manuelles comme
+modifications automatisées échouent toutes deux au garde-fou.
 
 ## Le cycle complet, étape par étape
 
 | Étape | Contenu | Commandes clés | Automatisation |
 |---|---|---|---|
-| 1. Collecte | Récupération depuis arXiv / Semantic Scholar / OpenAlex selon un profil thématique | `collect`, `digest` | Automatique |
+| 1. Collecte | Récupération depuis arXiv / Semantic Scholar / OpenAlex / Crossref avec requêtes thématiques booléennes, en-têtes « polite pool », backoff sur 429 et déduplication inter-sources | `collect`, `digest` | Automatique |
 | 2. Tri | Score de pertinence, criblage par axes de recherche, détection des lacunes | `score`, `screen`, `gap`, `brief` | Automatique |
 | 3. Acquisition | Téléchargement des PDF, fiches de lecture et plans | `download-pdfs`, `cards`, `outline` | Automatique |
 | 4. Analyse | PDF → sections/références structurées via GROBID | `parse-grobid`, `validate-grobid-artifacts` | Automatique |
-| 5. Extraction | Candidats de preuve (affirmation/citation/page) depuis le texte analysé | `extract-evidence-candidates`, `validate-evidence-candidates` | Automatique |
+| 5. Extraction | Candidats de preuve (affirmation/citation/page) depuis le texte analysé — heuristiques, ou proposés par LLM avec chaque citation vérifiée mot pour mot face à la source | `extract-evidence-candidates`, `extract-evidence-llm`, `validate-evidence-candidates` | Automatique |
 | 6. Revue | Décision garder / réviser / rejeter pour chaque candidat | `review-evidence-candidates`, `promotion-plan` | **Porte humaine** |
 | 7. Promotion | Transfert des preuves approuvées vers la matrice de preuves (`verified=false`) | `promote-evidence`, `audit-promoted-evidence` | Sous garde-fous |
 | 8. Localisation | Recherche et enregistrement de la page PDF exacte de chaque citation | `locate-pdf-pages`, `apply-page-metadata` | Sous garde-fous |
@@ -45,8 +50,8 @@ manuscrit et la décision `verified=true`. Des garde-fous empêchent toute
 | 10. Rédaction | Génération de correctifs de manuscrit en preview + diff | `manuscript-patch-preview` | Automatique |
 | 11. Application | Application des correctifs approuvés avec sauvegarde + contrôle SHA + écriture LF | `apply-manuscript-patch` | **Porte humaine** |
 | 12. Figures | Figures Graphviz/Mermaid pilotées par spécification, aucune donnée fabriquée | `propose-figures`, `render-figures`, `apply-figure-placeholder` | Sous garde-fous |
-| 13. Audit de brouillon | Vérification de tout brouillon (docx/md/qmd) : structure, affirmations sans source, exagérations, chiffres confrontés aux sorties d'expériences réelles | `audit-manuscript-draft` | Automatique |
-| 14. Vérification | Garantie qu'aucune automatisation n'a jamais posé `verified=true` | `guard-no-auto-verified`, `guard-paperops-overclaim`, `smoke-test` | Garde automatique / **verdict humain** |
+| 13. Audit de brouillon | Vérification de tout brouillon (docx/md/qmd) : structure, affirmations sans source, exagérations, et recoupement numérique automatique face aux fichiers de sortie d'expériences (`--experiment-data`) | `audit-manuscript-draft` | Automatique |
+| 14. Vérification | L'humain pose `verified=true` avec une attestation consignée dans le registre de vérification ; les garde-fous font échouer toute ligne vérifiée sans entrée correspondante dans le registre | `verify-evidence`, `guard-no-auto-verified`, `guard-paperops-overclaim`, `smoke-test` | **Porte humaine** / garde automatique |
 
 ## Pourquoi cela plutôt qu'un chat LLM ?
 
@@ -55,8 +60,8 @@ manuscrit et la décision `verified=true`. Des garde-fous empêchent toute
 | D'où vient cette phrase ? | inconnu | `paper_id` + `citekey` + citation + page dans la matrice de preuves |
 | Exactitude des citations | au mieux | `check-citekeys` contre le BibTeX canonique |
 | Édition du manuscrit | écrasement direct | preview → diff → approbation → application contrôlée par SHA → sauvegarde → audit |
-| Statut « vérifié » | implicite | seul un humain peut le poser ; les garde-fous l'imposent |
-| Chiffres du brouillon | non vérifiés | confrontés aux fichiers de sortie d'expériences réelles |
+| Statut « vérifié » | implicite | seul `verify-evidence --attest` peut le poser ; le registre de vérification + les garde-fous détectent tout le reste |
+| Chiffres du brouillon | non vérifiés | confrontés aux fichiers de sortie d'expériences réels (`audit-manuscript-draft --experiment-data`) |
 | Reproductibilité | liée à la session | SQLite + matrices CSV + rapports d'audit + journal + sources des figures |
 
 Les patrons de conception proviennent d'une étude de plus de 40 outils de
@@ -92,21 +97,27 @@ relancés après chaque modification.
 
 ```bash
 git clone https://github.com/SakJaeLim/paperops.git && cd paperops
-python -m venv .venv
+python -m venv .venv   # Python 3.10+
 # Windows : .venv\Scripts\activate | Unix : source .venv/bin/activate
 pip install -r requirements.txt
 python scripts/paperops.py init
 python scripts/paperops.py status
 ```
 
-Fonctionne immédiatement sans service externe : collecte, scoring, criblage,
-audit de brouillon, garde-fous, sources de figures. Compléments optionnels :
+Renseignez ensuite votre adresse e-mail dans `config/sources.yaml`
+(`openalex_mailto`) — elle place les requêtes OpenAlex/Crossref dans leurs
+« polite pools » ; sans elle, les deux API limitent fortement le débit
+(HTTP 429). Fonctionne immédiatement sans service externe : collecte,
+scoring, criblage, audit de brouillon, garde-fous, sources de figures.
+Compléments optionnels :
 
 | Dépendance | Permet | Installation |
 |---|---|---|
 | GROBID | Analyse PDF → texte structuré | `docker run -d -p 8070:8070 lfoppiano/grobid:0.8.0` |
-| Zotero + Better BibTeX | Synchronisation bibliographique canonique | zotero.org + plugin Better BibTeX |
-| Graphviz | Rendu des figures SVG/PNG | graphviz.org/download |
+| Zotero + Better BibTeX | Synchronisation bibliographique canonique (fichier `.bib` exporté) | zotero.org + plugin Better BibTeX |
+| Graphviz / Mermaid CLI | Rendu des figures SVG/PNG (les sources sont toujours écrites, même sans eux) | graphviz.org/download |
+| Clé API Semantic Scholar | Collecte S2 fiable (sans authentification, S2 limite fortement le débit) | `semantic_scholar_api_key` dans `config/sources.yaml` |
+| `OPENAI_API_KEY` | `extract-evidence-llm` (extraction LLM sous garde-fous, vérifiée mot pour mot ; tout endpoint compatible OpenAI via `OPENAI_BASE_URL`) | variable d'environnement |
 
 ## Session type
 
@@ -129,8 +140,13 @@ python scripts/paperops.py manuscript-patch-preview
 python scripts/paperops.py apply-manuscript-patch --from-preview <preview.csv> --dry-run
 python scripts/paperops.py apply-manuscript-patch --from-preview <preview.csv> --apply
 
-# Auditer son propre brouillon (docx/md/qmd)
-python scripts/paperops.py audit-manuscript-draft --input my_thesis_draft.docx
+# Auditer son propre brouillon (docx/md/qmd) — structure, affirmations sans
+# source, exagérations, et recoupement numérique automatique face à vos
+# fichiers de sortie d'expériences
+python scripts/paperops.py audit-manuscript-draft --input my_thesis_draft.docx --experiment-data data/experiment_outputs
+
+# Vérification humaine (LA porte) — consignée dans le registre de vérification
+python scripts/paperops.py verify-evidence --evidence-id ev_xxxx --by "Votre nom" --note "vérifié p. 3" --attest
 
 # Figures et contrôles finaux
 python scripts/paperops.py render-figures
@@ -144,23 +160,37 @@ python scripts/paperops.py smoke-test
 
 `audit-manuscript-draft` a été appliqué à un vrai manuscrit KCI
 (413 paragraphes) : 378 phrases analysées, structure des chapitres vérifiée,
-affirmations fortes sans source et formulations exagérées signalées, et
-**les 178 valeurs numériques** du brouillon confrontées aux fichiers de
-sortie d'expériences réels — 0 écart, 2 différences d'arrondi expliquées,
-1 taux de base recalculé depuis les journaux bruts. L'audit ne modifie
-jamais le brouillon et ne marque jamais rien comme vérifié ; il produit
-uniquement un rapport (MD + CSV) pour l'auteur.
+affirmations fortes sans source et formulations exagérées signalées, et les
+178 valeurs numériques du brouillon confrontées aux fichiers de sortie
+d'expériences réels — 0 écart, 2 différences d'arrondi expliquées, 1 taux de
+base recalculé depuis les journaux bruts de prédiction. (Ce recoupement était
+alors manuel ; depuis la v0.2.0, l'option `--experiment-data` l'effectue
+automatiquement : pour chaque chiffre, un statut correspondance exacte,
+correspondance à l'arrondi près, ou introuvable dans les données.) L'audit ne
+modifie jamais le brouillon et ne marque jamais rien comme vérifié ; il
+produit uniquement un rapport (MD + CSV) pour l'auteur.
 
 ## Règles de gouvernance
 
-1. La matrice de preuves n'est jamais modifiée à la légère.
-2. `verified=true` n'est jamais posé automatiquement — il n'existe aucune
-   transition automatisée vers l'état vérifié.
-3. La correspondance citation/page est un *alignement de source*, pas une
+1. La matrice de preuves n'est jamais modifiée à la légère ; toutes les
+   réécritures sont atomiques (fichier temporaire + renommage) et
+   accompagnées de sauvegardes horodatées.
+2. `verified=true` n'est jamais posé automatiquement. La seule voie autorisée
+   est `verify-evidence --attest`, qui consigne qui/quand/comment dans
+   `matrices/verification_ledger.csv` ; `guard-no-auto-verified` fait échouer
+   toute ligne vérifiée sans attestation correspondante dans le registre.
+3. Les candidats extraits par LLM sont vérifiés mot pour mot face au texte
+   source analysé — les citations paraphrasées ou inventées sont écartées et
+   signalées — puis passent par les mêmes portes de revue humaine que les
+   candidats heuristiques.
+4. La correspondance citation/page est un *alignement de source*, pas une
    validation de vérité.
-4. Les modifications du manuscrit passent uniquement par preview/apply sous
-   garde-fous, avec sauvegardes et garde + smoke-test après application.
-5. Les résultats des travaux connexes sont cités comme patrons de
+5. Les modifications du manuscrit passent uniquement par preview/apply sous
+   garde-fous, avec sauvegardes (stockées hors de l'arborescence gardée),
+   contrôles SHA-256 et garde + smoke-test après application ; les rapports
+   d'approbation sont recoupés avec le SHA-256 actuel du manuscrit, si bien
+   que les rapports périmés ou fabriqués sont rejetés.
+6. Les résultats des travaux connexes sont cités comme patrons de
    conception, jamais comme preuves de performance de PaperOps lui-même.
 
 ## Ce que ce dépôt NE contient PAS
@@ -175,14 +205,27 @@ chaque publication (`scripts/build_public_release.py`).
 
 ## Limites assumées
 
-- L'extraction de preuves repose sur des heuristiques par mots-clés ;
-  une extraction assistée par LLM est prévue comme étape gardée distincte.
+- L'extracteur LLM garantit uniquement que les citations sont mot pour mot ;
+  la qualité de la *sélection* des affirmations et des citations dépend
+  toujours du modèle, et chaque candidat passe toujours par une revue
+  humaine.
 - L'audit de brouillon est un signalement heuristique destiné à la revue
-  humaine, pas une validation de vérité.
+  humaine, pas une validation de vérité ; le recoupement numérique vérifie
+  que les chiffres figurent bien dans vos fichiers de données, pas que
+  l'analyse est correcte.
 - L'alignement citation/page ne valide pas la véracité d'une affirmation —
   par conception.
 - Aucune figure de résultats quantitatifs n'est générée sans fichier de
   données réel.
+- La collecte Semantic Scholar sans authentification est fortement limitée
+  en débit par S2 ; une clé API gratuite est en pratique indispensable pour
+  cette source.
+- Le registre de vérification dissuade la vérification automatisée
+  accidentelle ou négligente ; il n'est pas cryptographique et ne peut pas
+  empêcher quelqu'un de déterminé de falsifier des attestations dans ses
+  propres fichiers locaux.
+- Les README non anglophones peuvent avoir une version de retard sur la
+  version anglaise ; le README anglais et le CHANGELOG font foi.
 
 ## Licence
 

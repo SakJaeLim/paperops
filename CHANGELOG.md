@@ -46,7 +46,8 @@ a 4-version CI matrix are new in this release.
 - Legacy `extract-evidence` appended schema-drifted 14-column rows into the
   migrated 19+-column guarded matrix; it is now blocked with instructions for
   the guarded pipeline.
-- Legacy `audit` counted `user@gmail.com` as citekey `gmail` and matched
+- Legacy `audit` counted the domain part of any email address in the text as a
+  citekey (an address ending in `@gmail.com` became citekey `gmail`) and matched
   citekeys by substring against raw CSV text; it now uses the email-safe
   pattern over both manuscript roots against the real citekey column.
 - Cross-source duplicates: the same paper arriving from arXiv (arXiv id only)

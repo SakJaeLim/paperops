@@ -109,16 +109,19 @@ preferred_venues:
   - IEEE Security & Privacy
   - arXiv
 
+# Queries use explicit boolean syntax (AND/OR, quoted phrases). Bare keyword soups are
+# no longer sent as-is: arXiv treated them as near-match-everything and returned the
+# newest unrelated papers. Quoted phrases joined with AND keep results on-topic.
 query_groups:
   - name: operational_ontology_ax
-    query: "operational ontology enterprise knowledge graph AI operating model digital transformation decision automation"
+    query: '"enterprise ontology" AND ("knowledge graph" OR "operating model") AND ("decision automation" OR "digital transformation")'
   - name: ontology_graphrag_governance
-    query: "ontology knowledge graph GraphRAG generative AI governance traceability auditability"
+    query: '"knowledge graph" AND ("GraphRAG" OR "retrieval augmented generation") AND (governance OR traceability OR auditability)'
   - name: llm_governance_security
-    query: "LLM governance generative AI security prompt injection data leakage guardrails access control"
+    query: '"LLM" AND (governance OR guardrails) AND ("prompt injection" OR "data leakage" OR "access control")'
   - name: decision_automation_policy_reasoning
-    query: "decision automation policy as code rule based reasoning ontology explainable AI human in the loop"
+    query: '"decision automation" AND (ontology OR "policy as code" OR "rule-based reasoning") AND ("explainable AI" OR "human in the loop")'
   - name: enterprise_ai_operations
-    query: "enterprise AI platform LLMOps MLOps AI governance risk management compliance automation"
+    query: '("LLMOps" OR "MLOps") AND "AI governance" AND ("risk management" OR compliance)'
   - name: public_financial_ai_governance
-    query: "public sector AI governance financial AI governance model risk management trustworthy AI"
+    query: '("public sector" OR financial) AND "AI governance" AND ("model risk management" OR "trustworthy AI")'

@@ -13,6 +13,7 @@ thresholds:
   important: 0.75
 
 recency:
-  current_year: 2026
-  full_score_years: 3
+  # current_year intentionally NOT pinned: the code uses the actual current year, so
+  # recency scoring never silently goes stale. Set current_year only to freeze scoring
+  # for a reproducibility snapshot.
   half_life_years: 8

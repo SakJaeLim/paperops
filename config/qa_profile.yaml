@@ -1,0 +1,49 @@
+# Corpus/domain-specific QA heuristics, externalized from code (v0.2.0).
+# These lists previously lived hardcoded in paperops.py and were specific to one
+# author's biomedical-adjacent corpus. Edit them for YOUR corpus; empty lists simply
+# disable the corresponding warning/flag.
+
+# Terms that mark an evidence row as domain-specific (audit-domain-specific-claims):
+domain_specific_keywords:
+  - biomedical
+  - clinical
+  - clinician
+  - patient
+  - patients
+  - disease
+  - diseases
+  - medical
+  - medicine
+  - orphanet
+  - orphadata
+  - pmid
+  - drug
+  - phenotyping
+  - biology
+  - regulatory
+  - onset age
+  - clinical milestone
+
+# Terms that flag a row in guard-paperops-overclaim (performance/scale claims that must
+# never be presented as PaperOps' own performance evidence):
+overclaim_keywords:
+  - accuracy
+  - validated
+  - consensus triples
+  - disease
+  - diseases
+  - clinical
+  - biology
+  - biomedical
+  - orphadata
+  - pmid
+
+# Exact tokens from a specific source corpus; quotes containing them get the
+# domain_specific_claim_use_cautiously warning in promoted-evidence QA:
+corpus_specific_tokens:
+  - "460,497"
+  - "13,431"
+  - "92.7%"
+  - Orphadata
+  - biomedical
+  - clinical

@@ -4,6 +4,18 @@ defaults:
   card_limit: 25
   parse_max_pages: 80
 
+# GROBID server for PDF -> TEI parsing (or set the GROBID_URL env var).
+# grobid_url: "http://localhost:8070"
+
+# LLM settings for the guarded extract-evidence-llm command. The API key is NEVER put
+# in this file — set the OPENAI_API_KEY env var (OPENAI_BASE_URL for compatible servers).
+llm:
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4o-mini"
+  max_sections: 12
+  max_candidates_per_section: 5
+  timeout_seconds: 120
+
 paths:
   database: data/metadata/papers.sqlite
   evidence_matrix: matrices/evidence_matrix.csv

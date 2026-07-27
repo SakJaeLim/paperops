@@ -1,0 +1,259 @@
+# PaperOps figure specs (spec-driven; sources are rendered verbatim).
+#
+# Principle: this file never fabricates data figures. Only the diagram sources
+# written below are rendered; quantitative/result charts require real data and
+# are out of scope here.
+#
+# Schema (loaded by scripts/paperops_figures.py):
+#   figures:
+#     - id: unique snake_case figure id                        (required)
+#       kind: dot | mermaid                                    (required)
+#       caption: manuscript caption text                       (required)
+#       target_heading: exact markdown heading line to anchor  (required)
+#       source: |                                              (required)
+#         inline dot/mermaid source, rendered as-is
+#       placeholder: custom manuscript block to insert instead (optional)
+#         of the default ![caption](figures/<id>.svg){#fig-<id>} line
+#   Optional extra keys:
+#       title: human-readable figure title
+#       target_file: manuscript file the figure is inserted into
+#       mermaid: companion Mermaid source emitted as .mmd for GitHub-native
+#         display when kind is dot
+#
+# Heading anchoring: target_heading must match a manuscript line exactly
+# (whitespace-stripped, line-anchored; matches inside ``` code fences are
+# ignored). Zero matches blocks with heading_not_found; multiple matches
+# block with heading_ambiguous.
+figures:
+- id: fig_pipeline
+  kind: dot
+  title: PaperOps end-to-end pipeline
+  caption: PaperOps end-to-end pipeline. Literature collection, parsing, and evidence extraction
+    are automated, while review, verification, and manuscript changes pass through explicit
+    human approval gates.
+  target_file: 05_manuscript/chapters/ch3_method.qmd
+  target_heading: '## PaperOps Architecture'
+  source: |
+    digraph fig_pipeline {
+      graph [fontname="Helvetica", fontsize=11, rankdir=TB, splines=ortho, nodesep=0.45, ranksep=0.55, pad=0.2];
+      node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor="#F4F4F2", color="#555555", margin="0.18,0.10"];
+      edge [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.7];
+      collect [label="Collect\n(arXiv / S2 / OpenAlex)"];
+      screen [label="Score & Screen"];
+      pdf [label="PDF Download"];
+      grobid [label="GROBID Parse"];
+      extract [label="Evidence Candidate\nExtraction"];
+      review [label="Human Review\n(review queue)", fillcolor="#FFE9C7"];
+      matrix [label="Evidence Matrix\n(promoted rows)", shape=cylinder, fillcolor="#EAF4EA"];
+      preview [label="Manuscript Patch\nPreview + Diff"];
+      approve [label="Human Approval", fillcolor="#FFE9C7"];
+      apply [label="Guarded Apply\n(backup + LF write)"];
+      guard [label="Guards\n(no-auto-verified, smoke-test)", fillcolor="#DCE9F7"];
+      thesis [label="Thesis Manuscript\n(Quarto)", shape=cylinder, fillcolor="#EAF4EA"];
+      subgraph cluster_auto {
+        label="Automated collection & extraction"; style=dashed; color="#999999";
+        collect -> screen -> pdf -> grobid -> extract;
+      }
+      subgraph cluster_gov {
+        label="Governed review & writing"; style=dashed; color="#999999";
+        review -> matrix [label="promote"];
+        matrix -> preview -> approve -> apply -> thesis;
+      }
+      extract -> review;
+      apply -> guard [style=dashed, label="post-check"];
+      guard -> matrix [style=dashed, label="audit", constraint=false];
+    }
+  mermaid: |
+    flowchart LR
+      A[Collect<br/>arXiv / Semantic Scholar / OpenAlex] --> B[Score & Screen]
+      B --> C[PDF Download]
+      C --> D[GROBID Parse]
+      D --> E[Evidence Candidate Extraction]
+      E --> F{{Human Review}}
+      F -->|promote| G[(Evidence Matrix)]
+      G --> H[Manuscript Patch Preview + Diff]
+      H --> I{{Human Approval}}
+      I --> J[Guarded Apply<br/>backup + LF write]
+      J --> K[(Thesis Manuscript)]
+      J -.post-check.-> L[Guards<br/>no-auto-verified, smoke-test]
+      L -.audit.-> G
+- id: fig_evidence_flow
+  kind: dot
+  title: Evidence governance flow
+  caption: Evidence governance flow. Quote matching and page location are treated as source-alignment
+    checks; the verified state is reachable only through an explicit human verification gate.
+  target_file: 05_manuscript/chapters/ch3_method.qmd
+  target_heading: '## Evidence-first Workflow'
+  source: |
+    digraph fig_evidence_flow {
+      graph [fontname="Helvetica", fontsize=11, rankdir=TB, splines=ortho, nodesep=0.45, ranksep=0.55, pad=0.2];
+      node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor="#F4F4F2", color="#555555", margin="0.18,0.10"];
+      edge [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.7];
+      cand [label="Evidence Candidate\n(claim + quote + location)"];
+      valid [label="Structural Validation\n(schema, citekey)"];
+      align [label="Source Alignment\n(quote match, page locate)"];
+      queue [label="Review Queue", shape=cylinder, fillcolor="#EAF4EA"];
+      human [label="Human Decision\n(keep / revise / reject)", fillcolor="#FFE9C7"];
+      promoted [label="Promoted Row\nverified=false", shape=cylinder, fillcolor="#EAF4EA"];
+      pdfcheck [label="PDF Page Check\n(required for high-risk)"];
+      verify [label="Human Verification\nGate", fillcolor="#FFE9C7"];
+      verified [label="verified=true\n(manual only)", fillcolor="#DCE9F7"];
+      align_note [label="alignment != truth validation", shape=note, fillcolor="#FFF7D6"];
+      { rank=same; cand; valid; align; queue; human; }
+      { rank=same; align_note; verified; verify; pdfcheck; promoted; }
+      cand -> valid -> align -> queue -> human [constraint=false];
+      // invisible vertical pins keep row 2 folded under row 1
+      cand -> align_note [style=invis];
+      valid -> verified [style=invis];
+      align -> verify [style=invis];
+      queue -> pdfcheck [style=invis];
+      human -> promoted [label="promote"];
+      promoted -> pdfcheck [constraint=false];
+      pdfcheck -> verify [constraint=false];
+      verify -> verified [constraint=false];
+    }
+  mermaid: |
+    flowchart LR
+      A[Evidence Candidate<br/>claim + quote + location] --> B[Structural Validation]
+      B --> C[Source Alignment<br/>quote match, page locate]
+      C --> D[(Review Queue)]
+      D --> E{{Human Decision}}
+      E --> F[(Promoted Row<br/>verified=false)]
+      F --> G[PDF Page Check]
+      G --> H{{Human Verification Gate}}
+      H --> I[verified=true<br/>manual only]
+- id: fig_guarded_apply
+  kind: dot
+  title: Guarded manuscript apply workflow
+  caption: Guarded manuscript apply workflow. Every manuscript change is previewed as a diff,
+    requires human approval, is applied against a backup, and is followed by automated guard
+    and smoke-test checks; failures roll back from the backup.
+  target_file: 05_manuscript/chapters/ch3_method.qmd
+  target_heading: '## Human Verification Policy'
+  source: |
+    digraph fig_guarded_apply {
+      graph [fontname="Helvetica", fontsize=11, rankdir=TB, splines=ortho, nodesep=0.45, ranksep=0.55, pad=0.2];
+      node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor="#F4F4F2", color="#555555", margin="0.18,0.10"];
+      edge [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.7];
+      preview [label="Patch Preview\n(CSV + MD + diff)"];
+      review [label="Human Diff Review", fillcolor="#FFE9C7"];
+      backup [label="Backup Chapters"];
+      apply [label="Apply\n(SHA-checked, LF write)"];
+      postguard [label="guard-no-auto-verified\n+ smoke-test", fillcolor="#DCE9F7"];
+      report [label="Apply Report", shape=cylinder, fillcolor="#EAF4EA"];
+      rollback [label="Rollback from Backup", fillcolor="#F7DCDC"];
+      preview -> review;
+      review -> backup [label="approved"];
+      review -> preview [label="rejected / revise", style=dashed];
+      backup -> apply -> postguard;
+      postguard -> report [label="pass"];
+      postguard -> rollback [label="fail", style=dashed];
+      rollback -> preview [style=dashed];
+    }
+  mermaid: |
+    flowchart TB
+      A[Patch Preview<br/>CSV + MD + diff] --> B{{Human Diff Review}}
+      B -->|approved| C[Backup Chapters]
+      B -.rejected / revise.-> A
+      C --> D[Apply<br/>SHA-checked, LF write]
+      D --> E[guard-no-auto-verified<br/>+ smoke-test]
+      E -->|pass| F[(Apply Report)]
+      E -.fail.-> G[Rollback from Backup]
+      G -.-> A
+- id: fig_architecture
+  kind: dot
+  title: PaperOps system architecture
+  caption: PaperOps system architecture. A single CLI orchestrates external services (GROBID,
+    Zotero/Better BibTeX) and local stores (paper DB, matrices, manuscript), with audit reports
+    produced at each guarded step.
+  target_file: 05_manuscript/chapters/ch4_system.qmd
+  target_heading: '## Data Model'
+  source: |
+    digraph fig_architecture {
+      graph [fontname="Helvetica", fontsize=11, rankdir=TB, splines=ortho, nodesep=0.45, ranksep=0.55, pad=0.2];
+      node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor="#F4F4F2", color="#555555", margin="0.18,0.10"];
+      edge [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.7];
+      cli [label="PaperOps CLI\n(scripts/paperops.py)"];
+      subgraph cluster_ext {
+        label="External services"; style=dashed; color="#999999";
+        grobid [label="GROBID\n(Docker)"];
+        zotero [label="Zotero +\nBetter BibTeX"];
+        apis [label="Paper APIs\n(arXiv, S2, OpenAlex)"];
+      }
+      subgraph cluster_store {
+        label="Local stores"; style=dashed; color="#999999";
+        db [label="papers.sqlite", shape=cylinder, fillcolor="#EAF4EA"];
+        matrices [label="matrices/\n(evidence, screening, gap)", shape=cylinder, fillcolor="#EAF4EA"];
+        manuscript [label="05_manuscript/\n(Quarto)", shape=cylinder, fillcolor="#EAF4EA"];
+        reports [label="reports/\n(audit, review, figures)", shape=cylinder, fillcolor="#EAF4EA"];
+      }
+      config [label="config/\n(sources, scoring, prompts)", shape=folder];
+      cli -> apis [dir=both];
+      cli -> grobid [dir=both];
+      cli -> zotero [dir=both];
+      cli -> db [dir=both];
+      cli -> matrices [dir=both];
+      cli -> manuscript [label="guarded\napply only"];
+      cli -> reports;
+      config -> cli;
+    }
+  mermaid: |
+    flowchart TB
+      CLI[PaperOps CLI<br/>scripts/paperops.py]
+      subgraph External services
+        G[GROBID Docker]
+        Z[Zotero + Better BibTeX]
+        A[Paper APIs<br/>arXiv, S2, OpenAlex]
+      end
+      subgraph Local stores
+        DB[(papers.sqlite)]
+        M[(matrices/)]
+        MS[(05_manuscript/)]
+        R[(reports/)]
+      end
+      CFG[config/] --> CLI
+      CLI <--> A
+      CLI <--> G
+      CLI <--> Z
+      CLI <--> DB
+      CLI <--> M
+      CLI -->|guarded apply only| MS
+      CLI --> R
+- id: fig_verification_states
+  kind: dot
+  title: Evidence verification state transitions
+  caption: Evidence verification state transitions. There is no automated transition into
+    the verified state; only a human reviewer can mark evidence as verified, and guards enforce
+    this invariant.
+  target_file: 05_manuscript/chapters/ch5_evaluation.qmd
+  target_heading: '## Metrics'
+  source: |
+    digraph fig_verification_states {
+      graph [fontname="Helvetica", fontsize=11, rankdir=LR, splines=ortho, nodesep=0.45, ranksep=0.55, pad=0.2];
+      node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor="#F4F4F2", color="#555555", margin="0.18,0.10"];
+      edge [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.7];
+      extracted [label="extracted"];
+      validated [label="candidate\nvalidated"];
+      in_review [label="in review", fillcolor="#FFE9C7"];
+      promoted [label="promoted\n(verified=false)", shape=cylinder, fillcolor="#EAF4EA"];
+      pdf_check [label="pdf check\nrequired"];
+      verified [label="verified=true", fillcolor="#DCE9F7"];
+      rejected [label="rejected", fillcolor="#F7DCDC"];
+      extracted -> validated -> in_review;
+      in_review -> promoted [label="human keep"];
+      in_review -> rejected [label="human reject"];
+      promoted -> pdf_check;
+      pdf_check -> verified [label="human only", penwidth=2];
+      promoted -> verified [style=invis];
+      noauto [label="no automated edge\ninto verified", shape=note, fillcolor="#FFF7D6"];
+    }
+  mermaid: |
+    stateDiagram-v2
+      [*] --> extracted
+      extracted --> validated
+      validated --> in_review
+      in_review --> promoted : human keep
+      in_review --> rejected : human reject
+      promoted --> pdf_check
+      pdf_check --> verified : human only
+      note right of verified : no automated transition

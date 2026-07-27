@@ -25,7 +25,7 @@ Use PaperOps to collect, triage, and evidence-govern papers for a master's-level
 ```bash
 git clone https://github.com/SakJaeLim/paperops.git
 cd paperops
-git checkout topic/ax-ontology-governance
+git checkout main
 
 python -m venv .venv
 # Windows
@@ -43,6 +43,8 @@ python scripts/paperops.py gap
 python scripts/paperops.py brief
 python scripts/paperops.py status
 ```
+
+Note: the former `topic/ax-ontology-governance` working branch has been merged into `main` and deleted, so all commands in this runbook run from `main`.
 
 ## If PDFs are needed
 

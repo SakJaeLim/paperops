@@ -1,4 +1,5 @@
 .venv/
+.venv*/
 __pycache__/
 *.pyc
 .env
@@ -7,6 +8,8 @@ logs/
 matrices/
 notes/
 reports/
+backups/
+research_design/
 05_manuscript/
 manuscript/
 dist/

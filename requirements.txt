@@ -1,7 +1,6 @@
+# Runtime dependencies actually imported by the code.
+# (pandas, rapidfuzz, bibtexparser, pypdf were removed in v0.2.0: none were imported
+# anywhere, and bibtexparser's sdist-only build broke installs on some systems.)
 requests>=2.31.0
 PyYAML>=6.0.1
-rapidfuzz>=3.6.0
-pandas>=2.0.0
 PyMuPDF>=1.23.0
-bibtexparser>=1.4.0
-pypdf>=4.0.0

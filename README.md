@@ -18,24 +18,29 @@
 ![PaperOps end-to-end pipeline](assets/figures/fig_pipeline.svg)
 
 PaperOps automates the **entire research-writing lifecycle** — literature
-collection, screening, PDF parsing, evidence extraction, bibliography sync,
-guarded manuscript editing, reproducible figure generation, and draft
-auditing — through a single local-first CLI with **45+ commands**.
+collection, screening, PDF parsing, evidence extraction (heuristic and
+LLM-assisted with verbatim quote checking), bibliography sync, guarded
+manuscript editing, reproducible figure generation, and draft auditing with
+numeric cross-checks against experiment outputs — through a single
+local-first CLI with **50+ commands**.
 
 It is *not* an auto-paper-writer. The pipeline is automated, but three
 judgment points are deliberately reserved for humans: evidence adoption,
-manuscript-change approval, and the `verified=true` decision. Guards make it
-impossible for any automated step to fake those.
+manuscript-change approval, and the `verified=true` decision. The
+`verified=true` state can only be entered through the `verify-evidence`
+command with an explicit human attestation, recorded in a verification
+ledger that `guard-no-auto-verified` cross-checks — hand edits and automated
+edits both fail the guard.
 
 ## The full lifecycle, stage by stage
 
 | Stage | What happens | Key commands | Automation |
 |---|---|---|---|
-| 1. Collect | Fetch papers from arXiv / Semantic Scholar / OpenAlex with topic profiles | `collect`, `digest` | Automatic |
+| 1. Collect | Fetch papers from arXiv / Semantic Scholar / OpenAlex / Crossref with boolean topic queries, polite-pool headers, 429 backoff, and cross-source dedup | `collect`, `digest` | Automatic |
 | 2. Triage | Score relevance, screen by research axes, find research gaps | `score`, `screen`, `gap`, `brief` | Automatic |
 | 3. Acquire | Download PDFs, build paper cards and outlines | `download-pdfs`, `cards`, `outline` | Automatic |
 | 4. Parse | PDF → structured sections/references via GROBID | `parse-grobid`, `validate-grobid-artifacts` | Automatic |
-| 5. Extract | Pull claim/quote/page evidence candidates from parsed text | `extract-evidence-candidates`, `validate-evidence-candidates` | Automatic |
+| 5. Extract | Pull claim/quote/page evidence candidates from parsed text — heuristic, or LLM-proposed with every quote verbatim-verified against the source | `extract-evidence-candidates`, `extract-evidence-llm`, `validate-evidence-candidates` | Automatic |
 | 6. Review | Decide keep / revise / reject for each candidate | `review-evidence-candidates`, `promotion-plan` | **Human gate** |
 | 7. Promote | Move approved evidence into the Evidence Matrix (`verified=false`) | `promote-evidence`, `audit-promoted-evidence` | Guarded |
 | 8. Locate | Find and attach exact PDF pages for each quote | `locate-pdf-pages`, `apply-page-metadata` | Guarded |
@@ -43,8 +48,8 @@ impossible for any automated step to fake those.
 | 10. Write | Generate manuscript patches as preview + diff | `manuscript-patch-preview` | Automatic |
 | 11. Apply | Apply approved patches with backup + SHA check + LF write | `apply-manuscript-patch` | **Human gate** |
 | 12. Figures | Spec-driven Graphviz/Mermaid figures, never fabricated data | `propose-figures`, `render-figures`, `apply-figure-placeholder` | Guarded |
-| 13. Audit drafts | Check any draft (docx/md/qmd): structure, unsourced claims, overclaims, numbers vs. real experiment outputs | `audit-manuscript-draft` | Automatic |
-| 14. Verify | Enforce that no automation ever set `verified=true` | `guard-no-auto-verified`, `guard-paperops-overclaim`, `smoke-test` | Automatic guard / **human verdict** |
+| 13. Audit drafts | Check any draft (docx/md/qmd): structure, unsourced claims, overclaims, and automatic numeric cross-check against experiment output files (`--experiment-data`) | `audit-manuscript-draft` | Automatic |
+| 14. Verify | Human sets `verified=true` with an attestation recorded in the verification ledger; guards fail any verified row without a matching ledger entry | `verify-evidence`, `guard-no-auto-verified`, `guard-paperops-overclaim`, `smoke-test` | **Human gate** / automatic guard |
 
 ## Why this instead of a chat LLM?
 
@@ -53,8 +58,8 @@ impossible for any automated step to fake those.
 | Where did this sentence come from? | unknown | `paper_id` + `citekey` + quote + page in the Evidence Matrix |
 | Citation correctness | best-effort | `check-citekeys` against canonical BibTeX |
 | Manuscript edits | direct overwrite | preview → diff → approval → SHA-checked apply → backup → post-audit |
-| "Verified" status | implied | only a human can set it; guards enforce this |
-| Numbers in your draft | unchecked | cross-checked against actual experiment output files |
+| "Verified" status | implied | only `verify-evidence --attest` can set it; the verification ledger + guards catch anything else |
+| Numbers in your draft | unchecked | cross-checked against actual experiment output files (`audit-manuscript-draft --experiment-data`) |
 | Reproducibility | session-bound | SQLite + CSV matrices + audit reports + activity log + figure sources |
 
 Design patterns were synthesized from a survey of 40+ open-source research
@@ -89,21 +94,26 @@ Evidence Matrix → patch previews → (human) → manuscript**, with guards
 
 ```bash
 git clone https://github.com/SakJaeLim/paperops.git && cd paperops
-python -m venv .venv
+python -m venv .venv   # Python 3.10+
 # Windows: .venv\Scripts\activate | Unix: source .venv/bin/activate
 pip install -r requirements.txt
 python scripts/paperops.py init
 python scripts/paperops.py status
 ```
 
-Works immediately with no external services: collection, scoring, screening,
-draft audit, guards, figures-as-source. Optional add-ons:
+Then set your email in `config/sources.yaml` (`openalex_mailto`) — it puts
+OpenAlex/Crossref requests in their polite pools; without it both APIs
+throttle hard (HTTP 429). Works immediately with no external services:
+collection, scoring, screening, draft audit, guards, figures-as-source.
+Optional add-ons:
 
 | Dependency | Enables | Install |
 |---|---|---|
 | GROBID | PDF → structured text parsing | `docker run -d -p 8070:8070 lfoppiano/grobid:0.8.0` |
-| Zotero + Better BibTeX | Canonical bibliography sync | zotero.org + Better BibTeX plugin |
-| Graphviz | SVG/PNG figure rendering | graphviz.org/download |
+| Zotero + Better BibTeX | Canonical bibliography sync (exported `.bib` file) | zotero.org + Better BibTeX plugin |
+| Graphviz / Mermaid CLI | SVG/PNG figure rendering (sources are always written even without them) | graphviz.org/download |
+| Semantic Scholar API key | Reliable S2 collection (unauthenticated S2 rate-limits hard) | `semantic_scholar_api_key` in `config/sources.yaml` |
+| `OPENAI_API_KEY` | `extract-evidence-llm` (guarded, verbatim-checked LLM extraction; any OpenAI-compatible endpoint via `OPENAI_BASE_URL`) | environment variable |
 
 ## Typical session
 
@@ -126,8 +136,12 @@ python scripts/paperops.py manuscript-patch-preview
 python scripts/paperops.py apply-manuscript-patch --from-preview <preview.csv> --dry-run
 python scripts/paperops.py apply-manuscript-patch --from-preview <preview.csv> --apply
 
-# Audit your own draft (docx/md/qmd) — structure, unsourced claims, overclaims
-python scripts/paperops.py audit-manuscript-draft --input my_thesis_draft.docx
+# Audit your own draft (docx/md/qmd) — structure, unsourced claims, overclaims,
+# and automatic numeric cross-check against your experiment output files
+python scripts/paperops.py audit-manuscript-draft --input my_thesis_draft.docx --experiment-data data/experiment_outputs
+
+# Human verification (THE gate) — recorded in the verification ledger
+python scripts/paperops.py verify-evidence --evidence-id ev_xxxx --by "Your Name" --note "checked p.3" --attest
 
 # Figures and final checks
 python scripts/paperops.py render-figures
@@ -141,21 +155,32 @@ python scripts/paperops.py smoke-test
 
 `audit-manuscript-draft` was used on a real KCI manuscript (413 paragraphs):
 it scanned 378 sentences, checked chapter structure, flagged unsourced strong
-claims and overclaim language, and cross-checked **all 178 numeric values**
-in the draft against the actual experiment output files — 0 mismatches, with
+claims and overclaim language, and all 178 numeric values in the draft were
+cross-checked against the actual experiment output files — 0 mismatches, with
 2 rounding differences explained and 1 base rate re-computed from raw
-prediction logs. The audit never edits the draft and never marks anything
-verified; it produces a findings report (MD + CSV) for the author.
+prediction logs. (That cross-check was manual at the time; since v0.2.0 the
+`--experiment-data` flag performs it automatically: exact match, rounding
+match, and not-found-in-data statuses per number.) The audit never edits the
+draft and never marks anything verified; it produces a findings report
+(MD + CSV) for the author.
 
 ## Governance rules
 
-1. The Evidence Matrix is never modified casually.
-2. `verified=true` is never set automatically — there is no automated
-   transition into the verified state.
-3. Quote/page matching is *source alignment*, not truth validation.
-4. Manuscript edits happen only through guarded preview/apply with backups
-   and post-apply guard + smoke-test.
-5. Related-work findings are framed as design patterns, never as performance
+1. The Evidence Matrix is never modified casually; all rewrites are atomic
+   (temp file + rename) with timestamped backups.
+2. `verified=true` is never set automatically. The only sanctioned path is
+   `verify-evidence --attest`, which records who/when/how in
+   `matrices/verification_ledger.csv`; `guard-no-auto-verified` fails any
+   verified row without a matching ledger attestation.
+3. LLM-extracted candidates are verbatim-checked against the parsed source
+   text — paraphrased or invented quotes are dropped and reported — and then
+   flow through the same human review gates as heuristic candidates.
+4. Quote/page matching is *source alignment*, not truth validation.
+5. Manuscript edits happen only through guarded preview/apply with backups
+   (stored outside the guarded tree), SHA-256 checks, and post-apply guard +
+   smoke-test; approval reports are cross-checked against the current
+   manuscript SHA-256 so stale or fabricated reports are rejected.
+6. Related-work findings are framed as design patterns, never as performance
    evidence for PaperOps itself.
 
 ## What this repo does NOT include
@@ -169,11 +194,21 @@ every release (`scripts/build_public_release.py`).
 
 ## Honest limitations
 
-- Evidence extraction is keyword/heuristic-based; an LLM-assisted extractor
-  is a planned, separately-guarded step.
-- Draft auditing is heuristic flagging for human review, not truth validation.
+- The LLM extractor only guarantees quotes are verbatim; claim/quote
+  *selection* quality still depends on the model, and every candidate still
+  requires human review.
+- Draft auditing is heuristic flagging for human review, not truth
+  validation; the numeric cross-check verifies numbers appear in your data
+  files, not that the analysis is correct.
 - Quote/page alignment does not validate the truth of a claim — by design.
 - Quantitative result figures are never generated without an actual data file.
+- Unauthenticated Semantic Scholar collection is rate-limited by S2; a free
+  API key is effectively required for that source.
+- The verification ledger deters accidental and casual automated
+  verification; it is not cryptographic and cannot stop a determined human
+  from forging attestations in their own local files.
+- The non-English READMEs may lag the English one by a release; the English
+  README and CHANGELOG are authoritative.
 
 ## License
 

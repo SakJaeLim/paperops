@@ -38,10 +38,53 @@ def slug(s, n=80):
 
 def norm_title(s): return re.sub(r'\W+', '', (s or '').lower())
 def stable_id(p):
-    if p.get('doi'): key='doi:'+p['doi'].lower()
-    elif p.get('arxiv_id'): key='arxiv:'+p['arxiv_id'].lower()
+    if p.get('doi'): key='doi:'+normalize_doi(p['doi'])
+    elif p.get('arxiv_id'): key='arxiv:'+normalize_arxiv(p['arxiv_id'])
     else: key='title:'+norm_title(p.get('title',''))
     return hashlib.sha1(key.encode('utf-8')).hexdigest()[:16]
+
+
+def read_text_compat(path, warnings=None):
+    """Read text safely: utf-8-sig strict, then cp949, then lossy utf-8 with warning."""
+    data = Path(path).read_bytes()
+    for enc in ('utf-8-sig', 'cp949'):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    if warnings is not None:
+        warnings.append(f'{path}: undecodable bytes replaced (tried utf-8-sig, cp949)')
+    return data.decode('utf-8', errors='replace')
+
+
+def read_csv_dict(path):
+    """Read a CSV as dict rows. BOM-tolerant, extra Excel columns captured under _extra."""
+    path = Path(path)
+    if not path.exists():
+        return [], []
+    with path.open(encoding='utf-8-sig', newline='') as f:
+        reader = csv.DictReader(f, restkey='_extra', restval='')
+        rows = []
+        for row in reader:
+            row.pop('_extra', None)
+            row.pop(None, None)
+            rows.append(row)
+        return rows, [h for h in (reader.fieldnames or []) if h is not None]
+
+
+def atomic_write_csv(path, fieldnames, rows):
+    """Atomically rewrite a CSV: temp file + os.replace. Rows are projected onto fieldnames
+    so stray keys (Excel artifacts, restkey leftovers) can never crash or corrupt the write.
+    utf-8-sig keeps Korean text readable when the file is opened in Excel."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + '.tmp_write')
+    with tmp.open('w', encoding='utf-8-sig', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field, '') for field in fieldnames})
+    os.replace(tmp, path)
 
 
 def citekey(p):
@@ -76,17 +119,43 @@ def init_db():
         (ROOT/d).mkdir(parents=True, exist_ok=True)
     ev = ROOT/'matrices/evidence_matrix.csv'
     if not ev.exists():
-        ev.write_text('paper_id,citekey,claim_type,claim,quote,page,section,confidence,use_in_section,my_comment,verified,source_file,created_at,updated_at\n', encoding='utf-8')
+        ev.write_text('paper_id,citekey,claim_type,claim,quote,page,section,confidence,use_in_section,my_comment,verified,source_file,created_at,updated_at\n', encoding='utf-8-sig')
     log('init 실행: DB/폴더/Evidence Matrix 확인 완료')
 
 
+def find_existing_paper_id(c, p):
+    """Cross-source dedupe: the same paper arriving with only a DOI (Crossref/OpenAlex)
+    and only an arXiv id (arXiv) must land on ONE row. Match by normalized DOI, then
+    arXiv id, then normalized title."""
+    doi = normalize_doi(p.get('doi') or '')
+    arxiv = normalize_arxiv(p.get('arxiv_id') or '')
+    title = norm_title(p.get('title', ''))
+    if doi:
+        row = c.execute("SELECT id FROM papers WHERE doi IS NOT NULL AND doi != '' AND LOWER(REPLACE(REPLACE(doi,'https://doi.org/',''),'http://doi.org/',''))=?", (doi,)).fetchone()
+        if row:
+            return row['id']
+    if arxiv:
+        row = c.execute("SELECT id, arxiv_id FROM papers WHERE arxiv_id IS NOT NULL AND arxiv_id != ''").fetchall()
+        for r in row:
+            if normalize_arxiv(r['arxiv_id']) == arxiv:
+                return r['id']
+    if title:
+        row = c.execute('SELECT id FROM papers WHERE title_norm=?', (title,)).fetchone()
+        if row:
+            return row['id']
+    return None
+
+
 def upsert(p):
-    p['id'] = p.get('id') or stable_id(p); p['citekey'] = p.get('citekey') or citekey(p)
     c = conn()
+    p['id'] = p.get('id') or find_existing_paper_id(c, p) or stable_id(p)
+    p['citekey'] = p.get('citekey') or citekey(p)
     c.execute('''INSERT INTO papers(id,title,authors_json,year,venue,doi,arxiv_id,abstract,url,pdf_url,source,collection_date,status,score,topic_relevance,citation_count,open_access,local_pdf_path,parsed_text_path,citekey,title_norm,raw_json,updated_at)
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    ON CONFLICT(id) DO UPDATE SET title=excluded.title, authors_json=excluded.authors_json, year=excluded.year, venue=excluded.venue,
-    abstract=excluded.abstract, url=COALESCE(excluded.url,papers.url), pdf_url=COALESCE(excluded.pdf_url,papers.pdf_url), citation_count=MAX(papers.citation_count, excluded.citation_count), open_access=MAX(papers.open_access, excluded.open_access), raw_json=excluded.raw_json, updated_at=excluded.updated_at''',
+    ON CONFLICT(id) DO UPDATE SET title=excluded.title, authors_json=excluded.authors_json, year=COALESCE(excluded.year,papers.year), venue=COALESCE(excluded.venue,papers.venue),
+    doi=COALESCE(NULLIF(excluded.doi,''),papers.doi), arxiv_id=COALESCE(NULLIF(excluded.arxiv_id,''),papers.arxiv_id),
+    abstract=CASE WHEN LENGTH(COALESCE(excluded.abstract,'')) > LENGTH(COALESCE(papers.abstract,'')) THEN excluded.abstract ELSE papers.abstract END,
+    url=COALESCE(excluded.url,papers.url), pdf_url=COALESCE(excluded.pdf_url,papers.pdf_url), citation_count=MAX(papers.citation_count, excluded.citation_count), open_access=MAX(papers.open_access, excluded.open_access), raw_json=excluded.raw_json, updated_at=excluded.updated_at''',
     (p['id'],p.get('title'),json.dumps(p.get('authors') or [],ensure_ascii=False),p.get('year'),p.get('venue'),p.get('doi'),p.get('arxiv_id'),p.get('abstract'),p.get('url'),p.get('pdf_url'),p.get('source'),p.get('collection_date') or now(),'new',p.get('score',0),p.get('topic_relevance',0),p.get('citation_count',0),1 if p.get('open_access') else 0,p.get('local_pdf_path'),p.get('parsed_text_path'),p['citekey'],norm_title(p.get('title','')),json.dumps(p,ensure_ascii=False),now()))
     c.commit(); c.close(); return p['id']
 
@@ -94,17 +163,88 @@ def upsert(p):
 def queries():
     prof = load_yaml(ROOT/'config/topic_profile.yaml')
     qs = [x.get('query') for x in prof.get('query_groups',[]) if isinstance(x,dict) and x.get('query')]
-    return qs or ['ontology knowledge graph semantic web', 'automated literature review research assistant']
+    return qs or ['"ontology" AND "knowledge graph"', '"literature review" AND "research automation"']
+
+
+def sources_config():
+    cfg = load_yaml(ROOT/'config/sources.yaml')
+    cfg = cfg if isinstance(cfg, dict) else {}
+    sources = cfg.get('sources') if isinstance(cfg.get('sources'), dict) else {}
+    rate = cfg.get('rate_limits') if isinstance(cfg.get('rate_limits'), dict) else {}
+    mailto = str(os.environ.get('CROSSREF_MAILTO') or cfg.get('openalex_mailto') or '').strip()
+    if 'your-email' in mailto.lower():
+        mailto = ''
+    s2_key = str(os.environ.get('SEMANTIC_SCHOLAR_API_KEY') or cfg.get('semantic_scholar_api_key') or '').strip()
+    user_agent = str(cfg.get('user_agent') or '').strip() or ('PaperOps/0.2 (mailto:%s)' % mailto if mailto else 'PaperOps/0.2')
+
+    def source_opts(name, default_sleep):
+        opts = sources.get(name) if isinstance(sources.get(name), dict) else {}
+        return {
+            'enabled': bool(opts.get('enabled', True)),
+            'max_results': int(opts.get('max_results_per_query') or 0) or None,
+            'sleep': float(opts.get('sleep_seconds') or rate.get('sleep_seconds_between_requests') or default_sleep),
+        }
+    return {
+        'mailto': mailto,
+        's2_key': s2_key,
+        'user_agent': user_agent,
+        'arxiv': source_opts('arxiv', 3.0),
+        'openalex': source_opts('openalex', 1.0),
+        'crossref': source_opts('crossref', 1.0),
+        'semantic_scholar': source_opts('semantic_scholar', 1.5),
+    }
+
+
+def fetch_url(url, headers=None, retries=3, timeout=30):
+    """GET with polite retry/backoff. Honors Retry-After on 429/503."""
+    last_error = None
+    for attempt in range(retries):
+        req = urllib.request.Request(url, headers=headers or {'User-Agent': 'PaperOps/0.2'})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read()
+        except urllib.error.HTTPError as e:
+            last_error = e
+            if e.code in (429, 500, 502, 503) and attempt < retries - 1:
+                retry_after = e.headers.get('Retry-After') if e.headers else None
+                try:
+                    delay = min(60.0, float(retry_after)) if retry_after else 2.0 * (2 ** attempt)
+                except ValueError:
+                    delay = 2.0 * (2 ** attempt)
+                time.sleep(delay)
+                continue
+            raise
+        except urllib.error.URLError as e:
+            last_error = e
+            if attempt < retries - 1:
+                time.sleep(1.5 * (2 ** attempt))
+                continue
+            raise
+    raise last_error
 
 
 def fetch_json(url, headers=None):
-    req = urllib.request.Request(url, headers=headers or {'User-Agent':'PaperOps/0.1'})
-    with urllib.request.urlopen(req, timeout=30) as r: return json.loads(r.read().decode('utf-8','ignore'))
+    return json.loads(fetch_url(url, headers=headers).decode('utf-8', 'ignore'))
 
 
-def collect_arxiv(q, limit):
-    url='https://export.arxiv.org/api/query?search_query=all:'+urllib.parse.quote(q)+'&start=0&max_results='+str(limit)+'&sortBy=submittedDate&sortOrder=descending'
-    data=urllib.request.urlopen(url, timeout=30).read()
+def arxiv_query_expr(q):
+    """Build a valid arXiv boolean query. Explicit syntax (AND/OR/field prefixes, quotes)
+    passes through; a bare keyword soup becomes an AND of the first terms so results
+    actually match the topic instead of arXiv returning loosely-related items."""
+    q = str(q or '').strip()
+    if re.search(r'\b(AND|OR|ANDNOT)\b', q) or re.search(r'\b(all|ti|abs|cat|au):', q):
+        return re.sub(r'"([^"]+)"', lambda m: 'all:"%s"' % m.group(1), q) if ('"' in q and 'all:' not in q and 'ti:' not in q and 'abs:' not in q) else q
+    terms = [t for t in re.split(r'\s+', q) if t]
+    terms = terms[:6]
+    return ' AND '.join('all:"%s"' % t for t in terms) if terms else 'all:"research"'
+
+
+def collect_arxiv(q, limit, cfg=None):
+    cfg = cfg or sources_config()
+    expr = arxiv_query_expr(q)
+    url = ('https://export.arxiv.org/api/query?search_query=' + urllib.parse.quote(expr)
+           + '&start=0&max_results=' + str(limit) + '&sortBy=relevance&sortOrder=descending')
+    data = fetch_url(url, headers={'User-Agent': cfg['user_agent']})
     root=ET.fromstring(data); ns={'a':'http://www.w3.org/2005/Atom'}; out=[]
     for e in root.findall('a:entry',ns):
         title=' '.join((e.findtext('a:title','',ns) or '').split())
@@ -116,21 +256,49 @@ def collect_arxiv(q, limit):
     return out
 
 
-def collect_openalex(q, limit):
-    url='https://api.openalex.org/works?search='+urllib.parse.quote(q)+'&per-page='+str(limit)
-    js=fetch_json(url); out=[]
+def openalex_abstract(w):
+    inv = w.get('abstract_inverted_index')
+    if not isinstance(inv, dict) or not inv:
+        return ''
+    positions = {}
+    for word, indexes in inv.items():
+        for index in indexes or []:
+            positions[index] = word
+    return ' '.join(positions[i] for i in sorted(positions))[:4000]
+
+
+def collect_openalex(q, limit, cfg=None):
+    cfg = cfg or sources_config()
+    url = 'https://api.openalex.org/works?search=' + urllib.parse.quote(q) + '&per-page=' + str(limit)
+    if cfg['mailto']:
+        url += '&mailto=' + urllib.parse.quote(cfg['mailto'])
+    js = fetch_json(url, headers={'User-Agent': cfg['user_agent']}); out=[]
     for w in js.get('results',[]):
         authors=[a.get('author',{}).get('display_name','') for a in w.get('authorships',[])]
         loc=w.get('primary_location') or {}; src=loc.get('source') or {}; oa=w.get('open_access') or {}
-        out.append(dict(title=w.get('title'), authors=authors, year=w.get('publication_year'), venue=src.get('display_name'), doi=(w.get('doi') or '').replace('https://doi.org/',''), arxiv_id=None, abstract='', url=w.get('id'), pdf_url=loc.get('pdf_url') or oa.get('oa_url'), source='openalex', citation_count=w.get('cited_by_count') or 0, open_access=bool(oa.get('is_oa'))))
+        ids = w.get('ids') or {}
+        arxiv_url = str(ids.get('arxiv') or '')
+        arxiv_id = arxiv_url.rsplit('/', 1)[-1] if 'arxiv.org' in arxiv_url else None
+        out.append(dict(title=w.get('title'), authors=authors, year=w.get('publication_year'), venue=src.get('display_name'), doi=(w.get('doi') or '').replace('https://doi.org/',''), arxiv_id=arxiv_id, abstract=openalex_abstract(w), url=w.get('id'), pdf_url=loc.get('pdf_url') or oa.get('oa_url'), source='openalex', citation_count=w.get('cited_by_count') or 0, open_access=bool(oa.get('is_oa'))))
     return out
 
 
-def collect_crossref(q, limit):
-    url='https://api.crossref.org/works?query='+urllib.parse.quote(q)+'&rows='+str(limit)
-    js=fetch_json(url); out=[]
+CROSSREF_EXCLUDED_TYPES = {'peer-review', 'component', 'grant', 'report-component'}
+
+
+def collect_crossref(q, limit, cfg=None):
+    cfg = cfg or sources_config()
+    url = ('https://api.crossref.org/works?query=' + urllib.parse.quote(q) + '&rows=' + str(limit)
+           + '&filter=' + urllib.parse.quote('type:journal-article,type:proceedings-article,type:book-chapter,type:posted-content'))
+    if cfg['mailto']:
+        url += '&mailto=' + urllib.parse.quote(cfg['mailto'])
+    js = fetch_json(url, headers={'User-Agent': cfg['user_agent']}); out=[]
     for w in js.get('message',{}).get('items',[]):
+        if str(w.get('type') or '') in CROSSREF_EXCLUDED_TYPES:
+            continue
         title=(w.get('title') or [''])[0]
+        if re.match(r'^(decision letter|review(er)? report|author response)\b', title.strip(), re.I):
+            continue
         authors=[(' '.join([a.get('given',''),a.get('family','')]).strip()) for a in w.get('author',[])]
         year=None
         try: year=w.get('published-print',w.get('published-online',{})).get('date-parts',[[None]])[0][0]
@@ -139,17 +307,66 @@ def collect_crossref(q, limit):
     return out
 
 
+def collect_semantic_scholar(q, limit, cfg=None):
+    cfg = cfg or sources_config()
+    fields = 'title,abstract,year,venue,authors,url,openAccessPdf,citationCount,externalIds'
+    url = ('https://api.semanticscholar.org/graph/v1/paper/search?query=' + urllib.parse.quote(q)
+           + '&limit=' + str(limit) + '&fields=' + fields)
+    headers = {'User-Agent': cfg['user_agent']}
+    if cfg['s2_key']:
+        headers['x-api-key'] = cfg['s2_key']
+    js = fetch_json(url, headers=headers); out=[]
+    for w in js.get('data', []) or []:
+        ext = w.get('externalIds') or {}
+        oa = w.get('openAccessPdf') or {}
+        out.append(dict(title=w.get('title'), authors=[a.get('name','') for a in w.get('authors') or []], year=w.get('year'), venue=w.get('venue'), doi=ext.get('DOI'), arxiv_id=ext.get('ArXiv'), abstract=w.get('abstract') or '', url=w.get('url'), pdf_url=oa.get('url'), source='semantic_scholar', citation_count=w.get('citationCount') or 0, open_access=bool(oa.get('url'))))
+    return out
+
+
+COLLECTORS = [
+    ('arxiv', collect_arxiv),
+    ('semantic_scholar', collect_semantic_scholar),
+    ('openalex', collect_openalex),
+    ('crossref', collect_crossref),
+]
+
+
 def cmd_collect(args):
     init_db(); allp=[]; raw=ROOT/f"data/incoming/collection_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
+    cfg = sources_config()
+    if not cfg['mailto']:
+        print('WARN: no mailto configured (config/sources.yaml openalex_mailto or CROSSREF_MAILTO env); OpenAlex/Crossref rate limits will be much stricter')
+    failed = defaultdict(int)
+    consecutive = defaultdict(int)
+    disabled = set()
     for q in queries():
-        for name,fn in [('arxiv',collect_arxiv),('openalex',collect_openalex),('crossref',collect_crossref)]:
+        for name, fn in COLLECTORS:
+            opts = cfg[name]
+            if not opts['enabled'] or name in disabled:
+                continue
+            limit = min(args.limit, opts['max_results']) if opts['max_results'] else args.limit
             try:
-                ps=fn(q,args.limit); allp.extend(ps); time.sleep(0.5)
+                ps = fn(q, limit, cfg); allp.extend(ps)
+                consecutive[name] = 0
                 print(name, q, len(ps))
-            except Exception as e: print('WARN', name, e)
+            except Exception as e:
+                failed[name] += 1
+                consecutive[name] += 1
+                print('WARN', name, e)
+                if consecutive[name] >= 2:
+                    # Circuit breaker: a source that keeps failing (usually 429 without an
+                    # API key/mailto) would otherwise burn minutes of backoff per query.
+                    disabled.add(name)
+                    print(f'WARN {name}: {consecutive[name]} consecutive failures; skipping this source for the rest of this run '
+                          f'(configure semantic_scholar_api_key / openalex_mailto in config/sources.yaml)')
+            time.sleep(opts['sleep'])
     with raw.open('w',encoding='utf-8') as f:
         for p in allp:
             p['collection_date']=now(); upsert(p); f.write(json.dumps(p,ensure_ascii=False)+'\n')
+    if failed:
+        print('WARN sources with failures:', dict(failed))
+    if not allp:
+        print('WARN: collected 0 papers; check network, query syntax, and per-source warnings above')
     log(f'collect 실행: {len(allp)}건 수집, raw={raw.name}')
 
 
@@ -229,8 +446,14 @@ def cmd_download(args):
         dest=ROOT/'data/pdfs'/f"{r['id']}_{slug(r['title'],50)}.pdf"
         if dest.exists() and not args.overwrite: continue
         try:
-            req=urllib.request.Request(r['pdf_url'], headers={'User-Agent':'PaperOps/0.1'})
-            with urllib.request.urlopen(req, timeout=60) as resp: data=resp.read()
+            req=urllib.request.Request(r['pdf_url'], headers={'User-Agent':'PaperOps/0.2'})
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                content_type = str(resp.headers.get('Content-Type') or '').lower()
+                data=resp.read()
+            # An HTML paywall/landing page saved as .pdf poisons GROBID/PyMuPDF later.
+            if not data.startswith(b'%PDF-') and 'pdf' not in content_type:
+                print('WARN pdf', r['id'], f'not a PDF (content-type={content_type or "unknown"}); skipped')
+                continue
             if len(data)>1000:
                 dest.write_bytes(data); c.execute('UPDATE papers SET local_pdf_path=?, updated_at=? WHERE id=?',(str(dest.relative_to(ROOT)),now(),r['id'])); done+=1
         except Exception as e: print('WARN pdf', r['id'], e)
@@ -338,17 +561,19 @@ def yaml_frontmatter(data):
 
 
 def cmd_extract(args):
-    ev=ROOT/'matrices/evidence_matrix.csv'; init_db(); rows=top_rows(args.limit); existing=ev.read_text(encoding='utf-8') if ev.exists() else ''
-    with ev.open('a',encoding='utf-8',newline='') as f:
-        w=csv.writer(f); n=0
-        for r in rows:
-            if r['id'] in existing: continue
-            quote, page, section = evidence_quote_candidate(r)
-            claim=(quote or r['abstract'] or r['title'] or '')[:300].replace('\n',' ')
-            confidence='medium' if quote and page else 'low'
-            comment='파싱 본문에서 자동 추출한 후보 문장: 원문 검증 필요' if quote else '자동 초벌 행: 사람이 검증 필요'
-            w.writerow([r['id'],r['citekey'],'background',claim,quote,page,section,confidence,'related_work',comment,'false',r['parsed_text_path'] or '',datetime.now().isoformat(),datetime.now().isoformat()]); n+=1
-    log(f'extract-evidence 실행: 초벌 evidence {n}행 추가')
+    """DEPRECATED. The legacy extractor appended 14 positional columns straight into the
+    guarded Evidence Matrix, breaking the migrated 19+-column schema (rows without
+    evidence_id/exact_quote bypassed all provenance machinery) and used a substring
+    dedupe against the raw file text. The guarded pipeline replaces it."""
+    raise SystemExit(
+        'ERROR: extract-evidence is deprecated because it corrupts the guarded Evidence Matrix schema.\n'
+        'Use the guarded pipeline instead:\n'
+        '  1. parse-grobid --paper-id <id> --apply\n'
+        '  2. extract-evidence-candidates --paper-id <id> --apply   (heuristic)\n'
+        '     or extract-evidence-llm --paper-id <id> --apply       (LLM, verbatim-checked)\n'
+        '  3. review-evidence-candidates --paper-id <id>            (human review)\n'
+        '  4. promotion-plan --dry-run && promote-evidence --apply'
+    )
 
 
 def evidence_quote_candidate(row):
@@ -389,11 +614,7 @@ def cmd_outline(args):
 
 
 def read_evidence_rows():
-    ev = ROOT/'matrices/evidence_matrix.csv'
-    if not ev.exists():
-        return []
-    with ev.open(encoding='utf-8', newline='') as f:
-        return list(csv.DictReader(f))
+    return read_csv_dict(ROOT/'matrices/evidence_matrix.csv')[0]
 
 
 def axis_tags_for(row):
@@ -410,10 +631,12 @@ def axis_tags_for(row):
     return matched or ['unclassified']
 
 
-def screen_decision(row, axes):
+def screen_decision(row, axes, watch_threshold=None):
+    if watch_threshold is None:
+        watch_threshold = score_config()['thresholds']['candidate']
     if row['status'] in ('important', 'to_read'):
         return 'keep'
-    if row['score'] >= 0.35 and any(a in axes for a in ('ontology_core', 'graphrag_llm', 'research_agent', 'scholarly_kg')):
+    if row['score'] >= watch_threshold and any(a in axes for a in ('ontology_core', 'graphrag_llm', 'research_agent', 'scholarly_kg')):
         return 'watch'
     return 'defer'
 
@@ -423,12 +646,13 @@ def cmd_screen(args):
     rows = top_rows(args.limit)
     out = ROOT/'matrices/screening_matrix.csv'
     out.parent.mkdir(parents=True, exist_ok=True)
-    with out.open('w', encoding='utf-8', newline='') as f:
+    watch_threshold = score_config()['thresholds']['candidate']
+    with out.open('w', encoding='utf-8-sig', newline='') as f:
         w = csv.writer(f)
         w.writerow(['paper_id','citekey','title','year','venue','score','status','axes','decision','reason','url','pdf_url'])
         for r in rows:
             axes = axis_tags_for(r)
-            decision = screen_decision(r, axes)
+            decision = screen_decision(r, axes, watch_threshold)
             reason = f"score={r['score']:.3f}; axes={','.join(axes)}; status={r['status']}"
             w.writerow([r['id'], r['citekey'], r['title'], r['year'], r['venue'], f"{r['score']:.3f}", r['status'], ';'.join(axes), decision, reason, r['url'], r['pdf_url']])
     log(f'screen 실행: {out}, {len(rows)}건')
@@ -449,7 +673,7 @@ def cmd_gap(args):
         for axis in axes:
             groups[axis].append(r)
     csv_out = ROOT/'matrices/gap_matrix.csv'
-    with csv_out.open('w', encoding='utf-8', newline='') as f:
+    with csv_out.open('w', encoding='utf-8-sig', newline='') as f:
         w = csv.writer(f)
         w.writerow(['axis','paper_count','top_citekeys','evidence_verified_count','gap_hypothesis','next_action'])
         for axis, items in sorted(groups.items()):
@@ -578,11 +802,14 @@ def cmd_brief(args):
 
 
 def cmd_audit(args):
-    man=ROOT/'manuscript/main.md'; ev=ROOT/'matrices/evidence_matrix.csv'; out=ROOT/f'reports/audit_reports/audit_{today()}.md'
-    text=man.read_text(encoding='utf-8',errors='ignore') if man.exists() else ''
-    cites=set(re.findall(r'@([A-Za-z0-9_:-]+)', text))
-    evtext=ev.read_text(encoding='utf-8',errors='ignore') if ev.exists() else ''
-    missing=[c for c in sorted(cites) if c not in evtext]
+    # Uses the email-safe citekey pattern (manuscript_citekeys) over BOTH manuscript
+    # roots and compares against the actual citekey column — the old raw-text substring
+    # check counted author@example.com as a cite and kim2020ontology as covering kim2020.
+    out=ROOT/f'reports/audit_reports/audit_{today()}.md'
+    cites=set(manuscript_citekeys())
+    evidence_keys={str(r.get('citekey') or '').strip() for r in read_evidence_rows() if str(r.get('citekey') or '').strip()}
+    missing=[c for c in sorted(cites) if c not in evidence_keys]
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text('# Citation Audit\n\n' + f'- manuscript cites: {len(cites)}\n- missing in evidence matrix: {len(missing)}\n\n' + '\n'.join(f'- {m}' for m in missing), encoding='utf-8')
     log(f'audit 실행: {out}')
     print(out)
@@ -597,7 +824,7 @@ def file_row_count(path):
     if not path.exists():
         return 0
     try:
-        with path.open(encoding='utf-8', newline='') as f:
+        with path.open(encoding='utf-8-sig', newline='') as f:
             return max(0, sum(1 for _ in csv.reader(f)) - 1)
     except Exception:
         return 0
@@ -609,10 +836,11 @@ def status_line(name, ok, detail):
 
 
 def command_version(command):
-    try:
-        result = subprocess.run([command, '--version'], cwd=str(ROOT), capture_output=True, text=True, timeout=10)
-    except FileNotFoundError:
+    resolved = shutil.which(command)  # Windows-safe: finds quarto.cmd etc. via PATHEXT
+    if not resolved:
         return False, 'not installed or not on PATH'
+    try:
+        result = subprocess.run([resolved, '--version'], cwd=str(ROOT), capture_output=True, encoding='utf-8', errors='replace', timeout=10)
     except Exception as e:
         return False, str(e)
     text = (result.stdout or result.stderr or '').strip().splitlines()
@@ -735,12 +963,14 @@ def cmd_doctor(args):
 
     s2_cfg = sources.get('semantic_scholar_api_key') if isinstance(sources, dict) else ''
     api_checks = {
-        'OPENAI_API_KEY': configured_secret('OPENAI_API_KEY'),
+        'OPENAI_API_KEY (extract-evidence-llm)': configured_secret('OPENAI_API_KEY'),
         'SEMANTIC_SCHOLAR_API_KEY': configured_secret('SEMANTIC_SCHOLAR_API_KEY', s2_cfg),
-        'CROSSREF_MAILTO': configured_secret('CROSSREF_MAILTO', sources.get('openalex_mailto') if isinstance(sources, dict) else ''),
+        'mailto (openalex_mailto / CROSSREF_MAILTO)': bool(sources_config()['mailto']),
     }
     for key, ok in api_checks.items():
         lines.append(status_line(key, ok, 'present' if ok else 'missing'))
+    if not sources_config()['mailto']:
+        lines.append(status_line('polite pool', False, 'set openalex_mailto in config/sources.yaml — without it OpenAlex/Crossref throttle aggressively (HTTP 429)'))
 
     print('\n'.join(lines))
     log('doctor 실행: 환경 점검 완료')
@@ -757,6 +987,8 @@ def list_grobid_pdf_targets(limit):
     except Exception:
         rows = []
     seen = set()
+    if limit <= 0:
+        return targets
     for r in rows:
         pdf = ROOT/r['local_pdf_path']
         if pdf.exists() and pdf.suffix.lower() == '.pdf':
@@ -1014,7 +1246,8 @@ def call_grobid_process_fulltext(grobid_url, pdf):
         resp = requests.post(endpoint, files=files, data=data, timeout=timeout)
     if resp.status_code < 200 or resp.status_code >= 300:
         raise RuntimeError(f'GROBID HTTP {resp.status_code}: {resp.text[:500]}')
-    text = resp.text.strip()
+    # TEI is UTF-8; requests' charset guessing for application/xml can mangle diacritics.
+    text = resp.content.decode('utf-8', errors='replace').strip()
     if not text:
         raise RuntimeError('GROBID returned empty TEI XML')
     return text
@@ -1284,6 +1517,9 @@ def build_evidence_candidates(paper_id):
     artifact_dir = ROOT/'data/parsed/grobid'/slug(paper_id, 80)
     sections_path = artifact_dir/'sections.json'
     contexts_path = artifact_dir/'citation_contexts.json'
+    if not sections_path.exists() and not contexts_path.exists():
+        # Silent 0-candidate success here used to mask a missing/misnamed artifact dir.
+        raise RuntimeError(f'no GROBID artifacts for paper_id={paper_id} at {path_for_report(artifact_dir)}; run parse-grobid --paper-id {paper_id} --apply first')
     errors = []
     sections_data = read_json_file(sections_path, errors) if sections_path.exists() else {}
     contexts_data = read_json_file(contexts_path, errors) if contexts_path.exists() else {}
@@ -1376,10 +1612,9 @@ def evidence_matrix_metrics():
     if not path.exists():
         return metrics
     metrics['sha256'] = file_sha256(path)
-    with path.open(encoding='utf-8', newline='') as f:
-        reader = csv.DictReader(f)
-        metrics['schema'] = list(reader.fieldnames or [])
-        for row in reader:
+    rows, fieldnames = read_csv_dict(path)
+    metrics['schema'] = fieldnames
+    for row in rows:
             metrics['row_count'] += 1
             evidence_id = str(row.get('evidence_id') or '').strip()
             if evidence_id:
@@ -1437,11 +1672,7 @@ def row_has_source_location(row):
 
 
 def review_queue_rows_and_header(path):
-    if not path.exists():
-        return [], []
-    with path.open(encoding='utf-8', newline='') as f:
-        reader = csv.DictReader(f)
-        return list(reader), list(reader.fieldnames or [])
+    return read_csv_dict(path)
 
 
 def validate_review_queue_data(paper_id=None, write_report=True):
@@ -1616,21 +1847,16 @@ def cmd_validate_review_queue(args):
 
 
 def read_evidence_candidates(path):
-    if not path.exists():
-        return []
-    with path.open(encoding='utf-8', newline='') as f:
-        return list(csv.DictReader(f))
+    return read_csv_dict(path)[0]
 
 
 def write_evidence_candidates(path, rows):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open('w', encoding='utf-8', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=EVIDENCE_CANDIDATE_FIELDS)
-        writer.writeheader()
-        for row in rows:
-            row = {field: row.get(field, '') for field in EVIDENCE_CANDIDATE_FIELDS}
-            row['verified'] = 'false'
-            writer.writerow(row)
+    safe_rows = []
+    for row in rows:
+        row = {field: row.get(field, '') for field in EVIDENCE_CANDIDATE_FIELDS}
+        row['verified'] = 'false'
+        safe_rows.append(row)
+    atomic_write_csv(path, EVIDENCE_CANDIDATE_FIELDS, safe_rows)
 
 
 def distribution_for(rows, field):
@@ -1688,10 +1914,7 @@ def validate_evidence_candidate_data(paper_id=None, write_report=True):
         errors.append(f'missing candidate file: {path_for_report(candidate_path)}')
     else:
         try:
-            with candidate_path.open(encoding='utf-8', newline='') as f:
-                reader = csv.DictReader(f)
-                fieldnames = list(reader.fieldnames or [])
-                all_rows = list(reader)
+            all_rows, fieldnames = read_csv_dict(candidate_path)
         except Exception as e:
             errors.append(f'failed to read candidate file: {e}')
     missing_headers = [h for h in EVIDENCE_CANDIDATE_REQUIRED_HEADERS if h not in fieldnames]
@@ -1803,19 +2026,11 @@ def cmd_validate_evidence_candidates(args):
 
 
 def read_evidence_candidate_review_queue(path):
-    if not path.exists():
-        return []
-    with path.open(encoding='utf-8', newline='') as f:
-        return list(csv.DictReader(f))
+    return read_csv_dict(path)[0]
 
 
 def write_evidence_candidate_review_queue(path, rows):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open('w', encoding='utf-8', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=EVIDENCE_CANDIDATE_REVIEW_FIELDS)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({field: row.get(field, '') for field in EVIDENCE_CANDIDATE_REVIEW_FIELDS})
+    atomic_write_csv(path, EVIDENCE_CANDIDATE_REVIEW_FIELDS, rows)
 
 
 def preserved_review_values(existing_rows, warnings):
@@ -1921,14 +2136,21 @@ def cmd_review_evidence_candidates(args):
     existing_rows = read_evidence_candidate_review_queue(queue_path)
     preserved = preserved_review_values(existing_rows, warnings)
     queue_rows = [review_row_from_candidate(r, preserved) for r in rows]
-    duplicate_ids = sorted(k for k, v in count_values([r.get('candidate_id') for r in queue_rows]).items() if k and v > 1)
+    # MERGE, never overwrite: rows belonging to OTHER papers stay in the queue untouched.
+    # Regenerating paper B's queue must not delete paper A's pending human decisions.
+    other_rows = [r for r in existing_rows if str(r.get('paper_id') or '') != str(args.paper_id or '')]
+    preserved_other_count = len(other_rows)
+    merged_rows = other_rows + queue_rows
+    duplicate_ids = sorted(k for k, v in count_values([r.get('candidate_id') for r in merged_rows]).items() if k and v > 1)
     if duplicate_ids:
         errors.append(f'duplicate candidate_id values in review queue: {len(duplicate_ids)}')
     verified_false_count = sum(1 for r in queue_rows if str(r.get('verified') or '').strip().lower() == 'false')
     if verified_false_count != len(queue_rows):
         errors.append(f'review queue verified must remain false: {verified_false_count}/{len(queue_rows)}')
     if not errors:
-        write_evidence_candidate_review_queue(queue_path, queue_rows)
+        write_evidence_candidate_review_queue(queue_path, merged_rows)
+    if preserved_other_count:
+        warnings.append(f'preserved {preserved_other_count} review queue rows belonging to other papers')
     after = file_row_count(ROOT/'matrices/evidence_matrix.csv')
     if before != after:
         errors.append('evidence_matrix.csv row count changed during review queue generation')
@@ -2124,7 +2346,10 @@ def source_location_for_patch(row):
     if page:
         return page
     quote_hash = hashlib.sha256(str(row.get('quote') or '').encode('utf-8')).hexdigest()[:12]
-    return f"section_id={row.get('section_id') or ''}; section_heading={row.get('section_heading') or ''}; quote_sha256={quote_hash}"
+    # ';' is the source_location field delimiter — a heading containing ';' would corrupt
+    # parse_source_location, so it is sanitized to ',' on write.
+    heading = str(row.get('section_heading') or '').replace(';', ',')
+    return f"section_id={row.get('section_id') or ''}; section_heading={heading}; quote_sha256={quote_hash}"
 
 
 def write_promotion_plan_report(result):
@@ -2228,11 +2453,11 @@ def cmd_promotion_plan(args):
     out_candidates = ROOT/'matrices/evidence_promotion_candidates.csv'
     out_patch = ROOT/'matrices/evidence_matrix_patch_preview.csv'
     out_candidates.parent.mkdir(parents=True, exist_ok=True)
-    with out_candidates.open('w', encoding='utf-8', newline='') as f:
+    with out_candidates.open('w', encoding='utf-8-sig', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=PROMOTION_CANDIDATE_FIELDS)
         writer.writeheader()
         writer.writerows(promotion_rows)
-    with out_patch.open('w', encoding='utf-8', newline='') as f:
+    with out_patch.open('w', encoding='utf-8-sig', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=EVIDENCE_PATCH_PREVIEW_FIELDS)
         writer.writeheader()
         writer.writerows(patch_rows)
@@ -2282,18 +2507,11 @@ def resolve_root_path(path_text):
 
 
 def read_csv_rows_with_header(path):
-    if not path.exists():
-        return [], []
-    with path.open(encoding='utf-8', newline='') as f:
-        reader = csv.DictReader(f)
-        return list(reader), list(reader.fieldnames or [])
+    return read_csv_dict(path)
 
 
 def read_evidence_matrix_with_header():
-    path = ROOT/'matrices/evidence_matrix.csv'
-    with path.open(encoding='utf-8', newline='') as f:
-        reader = csv.DictReader(f)
-        return list(reader), list(reader.fieldnames or [])
+    return read_csv_dict(ROOT/'matrices/evidence_matrix.csv')
 
 
 def evidence_key_from_row(row):
@@ -2594,11 +2812,15 @@ def cmd_promote_evidence(args):
     applied = False
     all_appended_verified_false = True
 
+    ready_only = bool(getattr(args, 'ready_only', False))
     if args.apply:
         if validation['selected_rows'] == 0:
             errors.append('no patch preview rows selected for apply')
         if validation['blocked_count']:
-            errors.append(f'blocked candidates present: {validation["blocked_count"]}')
+            if ready_only:
+                warnings.append(f'--ready-only: proceeding with {validation["ready_count"]} ready rows; {validation["blocked_count"]} blocked rows reported but not applied')
+            else:
+                errors.append(f'blocked candidates present: {validation["blocked_count"]} (use --ready-only to apply the ready rows anyway)')
         if not errors and validation['ready_count']:
             ev = ROOT/'matrices/evidence_matrix.csv'
             matrix_rows, fieldnames = read_evidence_matrix_with_header()
@@ -2619,11 +2841,7 @@ def cmd_promote_evidence(args):
                 temp_row['verified'] = 'false'
                 new_rows.append(temp_row)
                 appended_candidate_ids.append(preview.get('candidate_id', ''))
-            with ev.open('w', encoding='utf-8', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(matrix_rows)
-                writer.writerows(new_rows)
+            atomic_write_csv(ev, fieldnames, matrix_rows + new_rows)
             applied = True
             all_appended_verified_false = all(str(r.get('verified') or '').strip().lower() == 'false' for r in new_rows)
             if not all_appended_verified_false:
@@ -2756,9 +2974,10 @@ def source_artifact_text_for_row(row, errors):
     return '', f'unsupported_source_file:{source_file or "(blank)"}'
 
 
-def promoted_row_qa(row):
+def promoted_row_qa(row, ledger=None):
     warnings = []
     errors = []
+    ledger = ledger if ledger is not None else verification_ledger_index()
     cid = row.get('_candidate_id') or candidate_id_from_risk_note(row.get('risk_note'))
     quote = str(row.get('quote') or '').strip()
     exact_quote = str(row.get('exact_quote') or '').strip()
@@ -2767,12 +2986,22 @@ def promoted_row_qa(row):
     actual_quote_sha = hashlib.sha256(quote.encode('utf-8')).hexdigest()[:12] if quote else ''
     if not cid:
         errors.append('missing_candidate_id_trace')
-    if str(row.get('verified') or '').strip().lower() != 'false':
-        errors.append('verified_not_false')
-    if str(row.get('verified_by') or '').strip():
-        errors.append('verified_by_must_be_blank')
-    if str(row.get('verified_at') or '').strip():
-        errors.append('verified_at_must_be_blank')
+    is_verified = str(row.get('verified') or '').strip().lower() == 'true'
+    ledger_entry = ledger.get(str(row.get('evidence_id') or '').strip())
+    attested = bool(
+        is_verified and ledger_entry
+        and str(ledger_entry.get('action') or '') == 'verify'
+        and str(ledger_entry.get('verified_by') or '').strip() == str(row.get('verified_by') or '').strip()
+    )
+    if is_verified and not attested:
+        errors.append('verified_true_without_human_attestation')
+    if not is_verified:
+        if str(row.get('verified') or '').strip().lower() != 'false':
+            errors.append('verified_not_false')
+        if str(row.get('verified_by') or '').strip():
+            errors.append('verified_by_must_be_blank')
+        if str(row.get('verified_at') or '').strip():
+            errors.append('verified_at_must_be_blank')
     if str(row.get('extraction_method') or '').strip() != 'candidate_review_guarded_apply':
         errors.append('unexpected_extraction_method')
     if not quote:
@@ -2787,7 +3016,7 @@ def promoted_row_qa(row):
         errors.append('quote_sha256_mismatch')
     if not str(row.get('page') or '').strip():
         warnings.append('page_blank_pdf_check_required')
-    if any(token in quote for token in ['460,497', '13,431', '92.7%', 'Orphadata', 'biomedical', 'clinical']):
+    if any(token in quote for token in qa_profile()['corpus_specific_tokens']):
         warnings.append('domain_specific_claim_use_cautiously')
     artifact_text, artifact_error = source_artifact_text_for_row(row, errors)
     quote_in_artifact = bool(quote and artifact_text and quote in artifact_text)
@@ -2855,7 +3084,8 @@ def write_promoted_evidence_qa_report(result):
 def cmd_audit_promoted_evidence(args):
     matrix = evidence_matrix_metrics()
     rows = promoted_evidence_rows(getattr(args, 'paper_id', None), getattr(args, 'candidate_id', None))
-    qa_rows = [promoted_row_qa(row) for row in rows]
+    ledger = verification_ledger_index()
+    qa_rows = [promoted_row_qa(row, ledger) for row in rows]
     candidate_ids = [row.get('candidate_id') for row in qa_rows]
     duplicate_ids = sorted(k for k, v in count_values(candidate_ids).items() if k and v > 1)
     warnings = []
@@ -2956,7 +3186,7 @@ def cmd_extract_promoted_rows(args):
     out_path = resolve_root_path(args.output) if getattr(args, 'output', None) else ROOT/f'reports/review/promoted_rows_external_review_input_{today()}.csv'
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_rows = [promoted_review_input_row(row) for row in rows]
-    with out_path.open('w', encoding='utf-8', newline='') as f:
+    with out_path.open('w', encoding='utf-8-sig', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=PROMOTED_REVIEW_INPUT_FIELDS)
         writer.writeheader()
         writer.writerows(out_rows)
@@ -2991,7 +3221,8 @@ def write_pdf_page_check_report(result):
     lines.append('|---|---|---|---|---|---|\n')
     for row in result.get('page_blank_rows', []):
         quote = (row.get('exact_quote') or row.get('quote') or '').replace('|', '\\|')[:160]
-        lines.append(f"| `{row.get('_candidate_id')}` | `{row.get('evidence_id')}` | `{row.get('citekey')}` | {row.get('claim_type')} | {str(row.get('section') or '').replace('|', '\\|')} | {quote} |\n")
+        section_cell = str(row.get('section') or '').replace('|', '\\|')  # kept out of the f-string: backslashes inside f-string expressions are a SyntaxError before Python 3.12
+        lines.append(f"| `{row.get('_candidate_id')}` | `{row.get('evidence_id')}` | `{row.get('citekey')}` | {row.get('claim_type')} | {section_cell} | {quote} |\n")
     if not result.get('page_blank_rows'):
         lines.append('| none |  |  |  |  |  |\n')
     lines.append('\n## Warnings\n')
@@ -3029,12 +3260,32 @@ def cmd_mark_pdf_check_required(args):
     log(f"mark-pdf-check-required dry-run 실행: promoted_only={result['promoted_only']}, page_blank={len(page_blank_rows)}")
 
 
-DOMAIN_SPECIFIC_KEYWORDS = ['biomedical', 'clinical', 'clinician', 'patient', 'patients', 'disease', 'diseases', 'medical', 'medicine', 'orphanet', 'orphadata', 'pmid', 'drug', 'phenotyping', 'biology', 'regulatory', 'onset age', 'clinical milestone']
+_QA_PROFILE_CACHE = None
+
+
+def qa_profile():
+    """Corpus/domain-specific heuristics live in config/qa_profile.yaml, NOT in code.
+    The shipped config carries the original author's biomedical-corpus lists; other
+    users edit the yaml for their own domain. Falls back to minimal neutral defaults."""
+    global _QA_PROFILE_CACHE
+    if _QA_PROFILE_CACHE is None:
+        cfg = load_yaml(ROOT/'config/qa_profile.yaml')
+        cfg = cfg if isinstance(cfg, dict) else {}
+
+        def str_list(key, default):
+            value = cfg.get(key)
+            return [str(v) for v in value] if isinstance(value, list) else default
+        _QA_PROFILE_CACHE = {
+            'domain_specific_keywords': str_list('domain_specific_keywords', []),
+            'overclaim_keywords': str_list('overclaim_keywords', ['accuracy', 'state-of-the-art', 'validated']),
+            'corpus_specific_tokens': str_list('corpus_specific_tokens', []),
+        }
+    return _QA_PROFILE_CACHE
 
 
 def domain_specific_hits(row):
     text = ' '.join([row.get('claim') or '', row.get('quote') or '', row.get('exact_quote') or '', row.get('section') or '']).lower()
-    return sorted({kw for kw in DOMAIN_SPECIFIC_KEYWORDS if kw in text})
+    return sorted({kw for kw in qa_profile()['domain_specific_keywords'] if kw in text})
 
 
 def write_domain_specific_claim_audit_report(result):
@@ -3101,11 +3352,96 @@ def git_status_paths(pathspecs=None):
         return [], f'git status unavailable: {e}'
 
 
+VERIFICATION_LEDGER_FIELDS = ['evidence_id', 'candidate_id', 'action', 'verified_by', 'verified_at', 'method', 'note', 'quote_sha256']
+VERIFICATION_LEDGER_PATH = 'matrices/verification_ledger.csv'
+
+
+def read_verification_ledger():
+    return read_csv_dict(ROOT/VERIFICATION_LEDGER_PATH)[0]
+
+
+def verification_ledger_index():
+    """Latest ledger action per evidence_id. A row is attested when its latest action
+    is 'verify' and verified_by/verified_at are recorded."""
+    index = {}
+    for entry in read_verification_ledger():
+        evidence_id = str(entry.get('evidence_id') or '').strip()
+        if evidence_id:
+            index[evidence_id] = entry
+    return index
+
+
+def append_verification_ledger(entry):
+    path = ROOT/VERIFICATION_LEDGER_PATH
+    rows = read_verification_ledger()
+    rows.append(entry)
+    atomic_write_csv(path, VERIFICATION_LEDGER_FIELDS, rows)
+
+
+def cmd_verify_evidence(args):
+    """THE human gate. This is the only sanctioned writer of verified=true, and it
+    requires an explicit human attestation (--by NAME --attest). Every change is
+    recorded in the verification ledger so guard-no-auto-verified can distinguish
+    human-attested rows from anything automation might have written."""
+    if not args.attest and not args.revoke:
+        raise SystemExit('ERROR: verify-evidence requires --attest, confirming YOU checked the original source (quote, page, meaning) yourself')
+    if not str(args.by or '').strip():
+        raise SystemExit('ERROR: --by <your name> is required; the ledger records who verified')
+    ev = ROOT/'matrices/evidence_matrix.csv'
+    if not ev.exists():
+        raise SystemExit(f'ERROR: missing Evidence Matrix: {ev}')
+    matrix_rows, fieldnames = read_evidence_matrix_with_header()
+    for required in ['evidence_id', 'verified', 'verified_by', 'verified_at']:
+        if required not in fieldnames:
+            raise SystemExit(f'ERROR: Evidence Matrix missing column `{required}`; run migrate-evidence first')
+    target = None
+    for row in matrix_rows:
+        if str(row.get('evidence_id') or '').strip() == args.evidence_id:
+            target = row
+            break
+    if target is None:
+        raise SystemExit(f'ERROR: evidence_id not found: {args.evidence_id}')
+    stamp = now()
+    backup_dir = ROOT/'matrices/backups'
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup = backup_dir/f'evidence_matrix_before_verify_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+    shutil.copy2(ev, backup)
+    quote = str(target.get('exact_quote') or target.get('quote') or '')
+    quote_sha = hashlib.sha256(quote.encode('utf-8')).hexdigest()[:12] if quote else ''
+    if args.revoke:
+        target['verified'] = 'false'
+        target['verified_by'] = ''
+        target['verified_at'] = ''
+        action = 'revoke'
+    else:
+        if str(target.get('verified') or '').strip().lower() == 'true':
+            raise SystemExit(f'ERROR: evidence_id already verified: {args.evidence_id} (use --revoke first to re-verify)')
+        target['verified'] = 'true'
+        target['verified_by'] = args.by.strip()
+        target['verified_at'] = stamp
+        action = 'verify'
+    atomic_write_csv(ev, fieldnames, matrix_rows)
+    append_verification_ledger({
+        'evidence_id': args.evidence_id,
+        'candidate_id': candidate_id_from_risk_note(target.get('risk_note')),
+        'action': action,
+        'verified_by': args.by.strip(),
+        'verified_at': stamp if action == 'verify' else '',
+        'method': args.method,
+        'note': args.note or '',
+        'quote_sha256': quote_sha,
+    })
+    print(f'{action}: evidence_id={args.evidence_id} by={args.by.strip()}')
+    print(f'ledger={ROOT/VERIFICATION_LEDGER_PATH}')
+    print(f'backup={backup}')
+    log(f'verify-evidence {action}: evidence_id={args.evidence_id}, by={args.by.strip()}')
+
+
 def write_no_auto_verified_guard_report(result):
     out = ROOT/f'reports/audit_reports/no_auto_verified_guard_{today()}.md'
     out.parent.mkdir(parents=True, exist_ok=True)
     lines = [f'# No-auto-verified Guard {today()}\n', '## Summary\n']
-    for key in ['promoted_only', 'paper_id_filter', 'row_count', 'verified_true_count', 'verified_by_filled_count', 'verified_at_filled_count', 'manuscript_changed_count', 'allow_approved_manuscript_changes', 'manuscript_apply_report', 'paperqa_langgraph_warning_count', 'passed']:
+    for key in ['promoted_only', 'paper_id_filter', 'row_count', 'verified_true_count', 'attested_verified_count', 'unattested_verified_count', 'verified_by_filled_count', 'verified_at_filled_count', 'manuscript_changed_count', 'allow_approved_manuscript_changes', 'manuscript_apply_report', 'paperqa_langgraph_warning_count', 'passed']:
         lines.append(f'- {key}: {result.get(key)}\n')
     lines.append('\n## Manuscript Changes\n')
     lines.extend([f"- `{line}`\n" for line in result.get('manuscript_changes', [])] or ['- none\n'])
@@ -3125,32 +3461,70 @@ def approved_manuscript_apply_report_errors(report_arg):
     report_path = resolve_root_path(report_arg)
     if not report_path.exists():
         return [f'manuscript apply report not found: {path_for_report(report_path)}']
-    text = report_path.read_text(encoding='utf-8')
+    text = read_text_compat(report_path)
+    errors = []
     checks = [
         ('- mode: apply', 'manuscript apply report must have mode=apply'),
         ('- applied: true', 'manuscript apply report must have applied=true'),
         ('- blocked_rows: 0', 'manuscript apply report must have blocked_rows=0'),
         ('## Errors\n- none', 'manuscript apply report must have no errors'),
     ]
-    return [message for needle, message in checks if needle not in text]
+    errors.extend(message for needle, message in checks if needle not in text)
+    # Anti-forgery cross-check: the report's recorded post-apply SHA256 values must match
+    # the manuscript files on disk RIGHT NOW. A fabricated approval report that was not
+    # produced by an actual guarded apply of the current manuscript state fails here.
+    target_pairs = re.findall(r'###\s+`([^`]+)`\n(.*?)(?=\n###\s+`|\n## |\Z)', text, re.S)
+    sha_checked = 0
+    for target_file, block in target_pairs:
+        match = re.search(r'-\s*file_sha256_after:\s*([0-9a-f]{64})', block)
+        if not match:
+            continue
+        recorded_sha = match.group(1)
+        target_path = ROOT/target_file
+        if not target_path.exists():
+            errors.append(f'apply report references missing manuscript file: {target_file}')
+            continue
+        if file_sha256(target_path) != recorded_sha:
+            errors.append(f'apply report sha256 does not match current manuscript file: {target_file} (report is stale or fabricated)')
+        sha_checked += 1
+    if not sha_checked:
+        errors.append('apply report contains no verifiable file_sha256_after entries; cannot cross-check against manuscript state')
+    return errors
 
 
 def cmd_guard_no_auto_verified(args):
     rows = promoted_evidence_rows(getattr(args, 'paper_id', None), getattr(args, 'candidate_id', None)) if getattr(args, 'promoted_only', False) else read_evidence_for_audit()
     errors = []
     warnings = []
+    ledger = verification_ledger_index()
     verified_true = [r for r in rows if str(r.get('verified') or '').strip().lower() == 'true']
-    verified_by_filled = [r for r in rows if str(r.get('verified_by') or '').strip()]
-    verified_at_filled = [r for r in rows if str(r.get('verified_at') or '').strip()]
-    if verified_true:
-        errors.append(f'promoted/evidence rows with verified=true: {len(verified_true)}')
-    if verified_by_filled:
-        errors.append(f'promoted/evidence rows with verified_by filled: {len(verified_by_filled)}')
-    if verified_at_filled:
-        errors.append(f'promoted/evidence rows with verified_at filled: {len(verified_at_filled)}')
+    attested = []
+    unattested = []
+    for r in verified_true:
+        evidence_id = str(r.get('evidence_id') or '').strip()
+        entry = ledger.get(evidence_id)
+        ok = (
+            entry is not None
+            and str(entry.get('action') or '').strip() == 'verify'
+            and str(entry.get('verified_by') or '').strip()
+            and str(entry.get('verified_by') or '').strip() == str(r.get('verified_by') or '').strip()
+            and str(entry.get('verified_at') or '').strip() == str(r.get('verified_at') or '').strip()
+        )
+        (attested if ok else unattested).append(evidence_id or '(no evidence_id)')
+    if unattested:
+        errors.append(f'verified=true rows WITHOUT a matching human attestation in {VERIFICATION_LEDGER_PATH}: {len(unattested)}')
+        warnings.extend([f'unattested verified row: `{evidence_id}` (use verify-evidence, never manual/automated edits)' for evidence_id in unattested[:50]])
+    inconsistent_by = [r for r in rows if str(r.get('verified_by') or '').strip() and str(r.get('verified') or '').strip().lower() != 'true']
+    inconsistent_at = [r for r in rows if str(r.get('verified_at') or '').strip() and str(r.get('verified') or '').strip().lower() != 'true']
+    if inconsistent_by:
+        errors.append(f'rows with verified_by filled but verified!=true: {len(inconsistent_by)}')
+    if inconsistent_at:
+        errors.append(f'rows with verified_at filled but verified!=true: {len(inconsistent_at)}')
     manuscript_changes, git_warn = git_status_paths(['05_manuscript', 'manuscript'])
     if git_warn:
         warnings.append(git_warn)
+        warnings.append('manuscript_change_detection: UNAVAILABLE (no usable git repo) — guard cannot see manuscript edits; use a git checkout for full protection')
+        print('WARN: manuscript change detection unavailable (no git); guard coverage is reduced')
     allow_manuscript_changes = bool(getattr(args, 'allow_approved_manuscript_changes', False))
     manuscript_apply_report = getattr(args, 'manuscript_apply_report', None) or ''
     if manuscript_changes:
@@ -3173,8 +3547,10 @@ def cmd_guard_no_auto_verified(args):
         'paper_id_filter': getattr(args, 'paper_id', None) or '(none)',
         'row_count': len(rows),
         'verified_true_count': len(verified_true),
-        'verified_by_filled_count': len(verified_by_filled),
-        'verified_at_filled_count': len(verified_at_filled),
+        'attested_verified_count': len(attested),
+        'unattested_verified_count': len(unattested),
+        'verified_by_filled_count': len(inconsistent_by),
+        'verified_at_filled_count': len(inconsistent_at),
         'manuscript_changed_count': len(manuscript_changes),
         'allow_approved_manuscript_changes': str(allow_manuscript_changes).lower(),
         'manuscript_apply_report': manuscript_apply_report or '(none)',
@@ -3187,111 +3563,49 @@ def cmd_guard_no_auto_verified(args):
     }
     report = write_no_auto_verified_guard_report(result)
     print(report)
-    for key in ['row_count', 'verified_true_count', 'verified_by_filled_count', 'verified_at_filled_count', 'manuscript_changed_count', 'paperqa_langgraph_warning_count', 'passed']:
+    for key in ['row_count', 'verified_true_count', 'attested_verified_count', 'unattested_verified_count', 'verified_by_filled_count', 'verified_at_filled_count', 'manuscript_changed_count', 'paperqa_langgraph_warning_count', 'passed']:
         print(f"{key}={result.get(key)}")
     log(f"guard-no-auto-verified 실행: promoted_only={result['promoted_only']}, passed={result['passed']}, errors={len(errors)}")
     if errors:
         raise SystemExit(1)
 
 
-PROMOTED_ROW_EXTERNAL_REVIEW_DECISIONS = {
-    'fb5137d2707f5e1d': {
-        'external_review_decision': 'downgrade_to_pdf_check',
-        'suggested_claim_type': 'evaluation_pattern',
-        'suggested_use_in_section': 'ch2_related_work;ch3_evaluation_design_motivation',
-        'rewrite_if_needed': 'ChronoMedKG 사례는 LLM judge가 아닌 gold-standard comparison을 평가 설계에 활용한 도메인 특화 사례를 보여준다.',
-        'pdf_check_priority': 'high',
-        'paperops_generalization_allowed': 'false',
-        'pdf_page_check_required': 'true',
-        'domain_specific_risk': 'high',
-    },
-    '23fe8ed59649fffa': {
-        'external_review_decision': 'revise',
-        'suggested_claim_type': 'method_pattern',
-        'suggested_use_in_section': 'ch2_related_work;ch3_design_motivation',
-        'rewrite_if_needed': '도메인 특화 KG 연구에서 disease-autonomous multi-agent pipeline이 대규모 biomedical triples 생성에 활용된 사례가 있다.',
-        'pdf_check_priority': 'high',
-        'paperops_generalization_allowed': 'false',
-        'pdf_page_check_required': 'true',
-        'domain_specific_risk': 'high',
-    },
-    'd5f10096ff325472': {
-        'external_review_decision': 'revise',
-        'suggested_claim_type': 'method_pattern',
-        'suggested_use_in_section': 'ch2_related_work;ch3_design_motivation',
-        'rewrite_if_needed': 'ChronoMedKG는 각 질병 단위를 독립적으로 처리하는 multi-stage pipeline 구조를 채택했다. 이는 도메인 단위 batch/agent pipeline 설계 사례로 참고할 수 있다.',
-        'pdf_check_priority': 'medium',
-        'paperops_generalization_allowed': 'false',
-        'pdf_page_check_required': 'true',
-        'domain_specific_risk': 'medium',
-    },
-    'e340369a59fb2532': {
-        'external_review_decision': 'revise',
-        'suggested_claim_type': 'agent_workflow_pattern',
-        'suggested_use_in_section': 'ch2_related_work;ch3_system_design_motivation',
-        'rewrite_if_needed': '특정 biomedical KG 구축 사례에서는 disease identifier를 입력으로 네 개의 협력 agent가 end-to-end pipeline을 수행하도록 설계했다.',
-        'pdf_check_priority': 'medium',
-        'paperops_generalization_allowed': 'false',
-        'pdf_page_check_required': 'true',
-        'domain_specific_risk': 'medium',
-    },
-    '06488bdee4bc0074': {
-        'external_review_decision': 'keep',
-        'suggested_claim_type': 'governance',
-        'suggested_use_in_section': 'ch3_system_design;ch5_evaluation_design',
-        'rewrite_if_needed': '검증 harness, judge-panel code, error taxonomy를 공개하는 방식은 연구 자동화 시스템의 auditability와 reproducibility를 높이는 설계 패턴으로 볼 수 있다.',
-        'pdf_check_priority': 'medium',
-        'paperops_generalization_allowed': 'limited_auditability_design_principle_only',
-        'pdf_page_check_required': 'true',
-        'domain_specific_risk': 'low',
-    },
-    '154a4607cb42751c': {
-        'external_review_decision': 'revise',
-        'suggested_claim_type': 'provenance_pattern',
-        'suggested_use_in_section': 'ch2_related_work;ch3_evidence_model_design',
-        'rewrite_if_needed': 'ChronoMedKG는 triple 단위에 evidence grading과 PMID provenance를 부여하는 방식으로 출처 추적성을 강화한 사례다.',
-        'pdf_check_priority': 'high',
-        'paperops_generalization_allowed': 'false',
-        'pdf_page_check_required': 'true',
-        'domain_specific_risk': 'high',
-    },
-    '6abed7fd8c1bd310': {
-        'external_review_decision': 'revise',
-        'suggested_claim_type': 'human_oversight',
-        'suggested_use_in_section': 'ch2_related_work;ch3_governance_design;ch6_limitations',
-        'rewrite_if_needed': '도메인 특화 자동화 시스템도 원천 데이터 범위와 실제 적용 범위를 구분하며, 고위험 도메인 적용에는 인간 전문가 검토와 별도 평가가 필요하다는 제한을 명시한다.',
-        'pdf_check_priority': 'medium',
-        'paperops_generalization_allowed': 'false',
-        'pdf_page_check_required': 'true',
-        'domain_specific_risk': 'high',
-    },
-    '67558897e8bfbc54': {
-        'external_review_decision': 'revise',
-        'suggested_claim_type': 'validation_boundary',
-        'suggested_use_in_section': 'ch3_evaluation_design;ch5_evaluation_limitations;ch6_limitations',
-        'rewrite_if_needed': 'text-grounding 검증은 원문 근거 일치 여부를 확인하는 절차이지, 도메인 사실 자체의 독립적 재검증은 아니라는 한계를 명확히 해야 한다.',
-        'pdf_check_priority': 'medium',
-        'paperops_generalization_allowed': 'limited_validation_boundary_principle_only',
-        'pdf_page_check_required': 'true',
-        'domain_specific_risk': 'medium',
-    },
-}
+_REVIEW_OVERRIDES_CACHE = None
+
+
+def review_overrides():
+    """Per-candidate external review decisions, externalized to config/review_overrides.yaml
+    (they are author-corpus-specific human decisions, not program logic). Unknown
+    candidate_ids get the conservative default_decision from the same file."""
+    global _REVIEW_OVERRIDES_CACHE
+    if _REVIEW_OVERRIDES_CACHE is None:
+        cfg = load_yaml(ROOT/'config/review_overrides.yaml')
+        cfg = cfg if isinstance(cfg, dict) else {}
+        decisions = cfg.get('decisions') if isinstance(cfg.get('decisions'), dict) else {}
+        default = cfg.get('default_decision') if isinstance(cfg.get('default_decision'), dict) else {}
+        _REVIEW_OVERRIDES_CACHE = {
+            'source_review': str(cfg.get('source_review') or 'row-level review overrides (config/review_overrides.yaml)'),
+            'decisions': {str(k): dict(v) for k, v in decisions.items() if isinstance(v, dict)},
+            'default_decision': {
+                'external_review_decision': str(default.get('external_review_decision') or 'downgrade_to_pdf_check'),
+                'suggested_claim_type': str(default.get('suggested_claim_type') or ''),
+                'suggested_use_in_section': str(default.get('suggested_use_in_section') or ''),
+                'rewrite_if_needed': str(default.get('rewrite_if_needed') or ''),
+                'pdf_check_priority': str(default.get('pdf_check_priority') or 'high'),
+                'paperops_generalization_allowed': str(default.get('paperops_generalization_allowed') or 'false'),
+                'pdf_page_check_required': str(default.get('pdf_page_check_required') or 'true'),
+                'domain_specific_risk': str(default.get('domain_specific_risk') or 'unknown'),
+            },
+        }
+    return _REVIEW_OVERRIDES_CACHE
 
 PROMOTED_ROW_REVIEW_DECISION_FIELDS = PROMOTED_REVIEW_INPUT_FIELDS + ['external_review_decision', 'suggested_claim_type', 'suggested_use_in_section', 'rewrite_if_needed', 'pdf_check_priority', 'paperops_generalization_allowed', 'pdf_page_check_required', 'domain_specific_risk']
 EVIDENCE_METADATA_PATCH_PREVIEW_FIELDS = ['candidate_id', 'evidence_id', 'paper_id', 'citekey', 'current_claim_type', 'suggested_claim_type', 'current_use_in_section', 'suggested_use_in_section', 'current_claim', 'rewrite_if_needed', 'external_review_decision', 'pdf_check_priority', 'paperops_generalization_allowed', 'pdf_page_check_required', 'domain_specific_risk', 'verified_should_remain', 'patch_action', 'source_review']
 
 
 def row_level_decision_for(candidate_id):
-    return PROMOTED_ROW_EXTERNAL_REVIEW_DECISIONS.get(candidate_id, {
-        'external_review_decision': 'downgrade_to_pdf_check',
-        'suggested_claim_type': '',
-        'suggested_use_in_section': '',
-        'rewrite_if_needed': '',
-        'pdf_check_priority': 'high',
-        'paperops_generalization_allowed': 'false',
-        'pdf_page_check_required': 'true',
-        'domain_specific_risk': 'unknown',
-    })
+    overrides = review_overrides()
+    return overrides['decisions'].get(candidate_id, dict(overrides['default_decision']))
 
 
 def write_row_level_review_pm_report(result):
@@ -3318,9 +3632,7 @@ def cmd_update_promoted_row_review_metadata(args):
     input_path = resolve_root_path(args.input)
     if not input_path.exists():
         raise SystemExit(f'ERROR: missing input CSV: {input_path}')
-    with input_path.open(encoding='utf-8', newline='') as f:
-        reader = csv.DictReader(f)
-        input_rows = list(reader)
+    input_rows, _ = read_csv_dict(input_path)
     decision_rows = []
     patch_rows = []
     for row in input_rows:
@@ -3347,16 +3659,16 @@ def cmd_update_promoted_row_review_metadata(args):
             'domain_specific_risk': decision.get('domain_specific_risk', ''),
             'verified_should_remain': 'false',
             'patch_action': 'metadata_preview_only_no_evidence_matrix_write',
-            'source_review': 'GPT Pro row-level review captured 2026-06-04',
+            'source_review': review_overrides()['source_review'],
         })
     decision_csv = resolve_root_path(args.output) if getattr(args, 'output', None) else ROOT/f'reports/review/promoted_rows_row_level_review_decisions_{today()}.csv'
     patch_csv = resolve_root_path(args.patch_preview) if getattr(args, 'patch_preview', None) else ROOT/f'matrices/evidence_matrix_metadata_patch_preview_{today()}.csv'
     decision_csv.parent.mkdir(parents=True, exist_ok=True)
     patch_csv.parent.mkdir(parents=True, exist_ok=True)
-    with decision_csv.open('w', encoding='utf-8', newline='') as f:
+    with decision_csv.open('w', encoding='utf-8-sig', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=PROMOTED_ROW_REVIEW_DECISION_FIELDS)
         writer.writeheader(); writer.writerows(decision_rows)
-    with patch_csv.open('w', encoding='utf-8', newline='') as f:
+    with patch_csv.open('w', encoding='utf-8-sig', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=EVIDENCE_METADATA_PATCH_PREVIEW_FIELDS)
         writer.writeheader(); writer.writerows(patch_rows)
     matrix = evidence_matrix_metrics()
@@ -3384,12 +3696,9 @@ def cmd_update_promoted_row_review_metadata(args):
     log(f"update-promoted-row-review-metadata dry-run 실행: rows={len(decision_rows)}, patch={path_for_report(patch_csv)}")
 
 
-OVERCLAIM_KEYWORDS = ['accuracy', 'validated', 'consensus triples', 'disease', 'diseases', 'clinical', 'biology', 'biomedical', 'orphadata', 'pmid']
-
-
 def paperops_overclaim_flags(row):
     text = ' '.join([row.get('claim') or '', row.get('quote') or '', row.get('exact_quote') or '', row.get('section') or '']).lower()
-    hits = sorted({kw for kw in OVERCLAIM_KEYWORDS if kw in text})
+    hits = sorted({kw for kw in qa_profile()['overclaim_keywords'] if kw in text})
     flags = []
     if hits:
         flags.append('domain_or_metric_specific_terms')
@@ -3474,7 +3783,7 @@ def cmd_pdf_page_verification_sheet(args):
             'pdf_verified_at': '',
             'pdf_verification_note': '',
         })
-    with out_path.open('w', encoding='utf-8', newline='') as f:
+    with out_path.open('w', encoding='utf-8-sig', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=PDF_PAGE_VERIFICATION_FIELDS)
         writer.writeheader(); writer.writerows(out_rows)
     report = ROOT/f'reports/review/pdf_page_verification_sheet_{today()}.md'
@@ -3614,7 +3923,7 @@ def cmd_locate_pdf_pages(args):
             'verified_should_remain': 'false',
             'note': note,
         })
-    with out_path.open('w', encoding='utf-8', newline='') as f:
+    with out_path.open('w', encoding='utf-8-sig', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=PDF_PAGE_LOCATOR_FIELDS)
         writer.writeheader(); writer.writerows(out_rows)
     matrix = evidence_matrix_metrics()
@@ -3792,9 +4101,7 @@ def cmd_apply_page_metadata(args):
                     row['verified_by'] = ''
                 if 'verified_at' in row:
                     row['verified_at'] = ''
-        with ev.open('w', encoding='utf-8', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader(); writer.writerows(matrix_rows)
+        atomic_write_csv(ev, fieldnames, matrix_rows)
         applied = True
     elif args.apply and not errors and not updated_items:
         warnings.append('no page metadata rows needed updating')
@@ -3809,16 +4116,22 @@ def cmd_apply_page_metadata(args):
         if comparison['schema_changed']:
             errors.append('Evidence Matrix schema changed during page metadata apply')
     final_rows = read_evidence_for_audit()
+    ledger = verification_ledger_index()
     promoted_final = [r for r in final_rows if candidate_id_from_risk_note(r.get('risk_note'))]
-    verified_true_count = sum(1 for r in promoted_final if str(r.get('verified') or '').strip().lower() == 'true')
-    verified_by_filled_count = sum(1 for r in promoted_final if str(r.get('verified_by') or '').strip())
-    verified_at_filled_count = sum(1 for r in promoted_final if str(r.get('verified_at') or '').strip())
+    unattested_after = [
+        r for r in promoted_final
+        if str(r.get('verified') or '').strip().lower() == 'true'
+        and str(ledger.get(str(r.get('evidence_id') or '').strip(), {}).get('action') or '') != 'verify'
+    ]
+    verified_true_count = len(unattested_after)
+    verified_by_filled_count = sum(1 for r in promoted_final if str(r.get('verified_by') or '').strip() and str(r.get('verified') or '').strip().lower() != 'true')
+    verified_at_filled_count = sum(1 for r in promoted_final if str(r.get('verified_at') or '').strip() and str(r.get('verified') or '').strip().lower() != 'true')
     if verified_true_count:
-        errors.append(f'promoted rows with verified=true after apply: {verified_true_count}')
+        errors.append(f'promoted rows with UNATTESTED verified=true after apply: {verified_true_count}')
     if verified_by_filled_count:
-        errors.append(f'promoted rows with verified_by filled after apply: {verified_by_filled_count}')
+        errors.append(f'promoted rows with verified_by filled but verified!=true after apply: {verified_by_filled_count}')
     if verified_at_filled_count:
-        errors.append(f'promoted rows with verified_at filled after apply: {verified_at_filled_count}')
+        errors.append(f'promoted rows with verified_at filled but verified!=true after apply: {verified_at_filled_count}')
     result = {
         'mode': 'apply' if args.apply else 'dry-run',
         'patch_preview': path_for_report(validation.get('patch_path')) if validation.get('patch_path') else args.from_preview,
@@ -4052,7 +4365,7 @@ def cmd_manuscript_patch_preview(args):
         if target_key in final_patched_sha_by_target:
             out_row['patched_file_sha256'] = final_patched_sha_by_target[target_key]
     csv_path.parent.mkdir(parents=True, exist_ok=True)
-    with csv_path.open('w', encoding='utf-8', newline='') as f:
+    with csv_path.open('w', encoding='utf-8-sig', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=MANUSCRIPT_PATCH_PREVIEW_FIELDS)
         writer.writeheader()
         writer.writerows(output_rows)
@@ -4254,7 +4567,9 @@ def cmd_apply_manuscript_patch(args):
 
     applied = False
     if not errors and args.apply:
-        backup_root = ROOT/'05_manuscript/backups'/f'manuscript_before_guarded_apply_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
+        # Backups live OUTSIDE the guarded 05_manuscript tree: backups inside it kept
+        # tripping guard-no-auto-verified (untracked changes) and double-counting citekeys.
+        backup_root = ROOT/'backups/manuscript'/f'manuscript_before_guarded_apply_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
         for path, state in file_state.items():
             rel = path.relative_to(ROOT/'05_manuscript')
             backup_path = backup_root/rel
@@ -4302,7 +4617,7 @@ def cmd_apply_manuscript_patch(args):
         })
 
     csv_path.parent.mkdir(parents=True, exist_ok=True)
-    with csv_path.open('w', encoding='utf-8', newline='') as f:
+    with csv_path.open('w', encoding='utf-8-sig', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=MANUSCRIPT_APPLY_FIELDS)
         writer.writeheader()
         writer.writerows(output_rows)
@@ -4413,6 +4728,312 @@ def cmd_extract_evidence_candidates(args):
         raise SystemExit(1)
 
 
+# --------------------------------------------------------------------------------------
+# LLM-assisted evidence extraction (guarded)
+#
+# Design (same governance as the heuristic extractor — the LLM gets NO extra trust):
+#   1. The LLM only PROPOSES candidates (claim + exact_quote) from GROBID-parsed sections.
+#   2. Every proposed exact_quote is verbatim-checked against the parsed section text
+#      (whitespace-normalized). Quotes the model made up are DROPPED and reported.
+#   3. Survivors enter the same candidates CSV with verified='false' and flow through the
+#      SAME human review -> promotion-plan -> guarded-apply pipeline. Nothing is skipped.
+# --------------------------------------------------------------------------------------
+
+def llm_config():
+    pipeline = load_yaml(ROOT/'config/pipeline.yaml')
+    llm = pipeline.get('llm') if isinstance(pipeline, dict) and isinstance(pipeline.get('llm'), dict) else {}
+    return {
+        'base_url': str(os.environ.get('OPENAI_BASE_URL') or llm.get('base_url') or 'https://api.openai.com/v1').rstrip('/'),
+        'model': str(llm.get('model') or 'gpt-4o-mini'),
+        'api_key': str(os.environ.get('OPENAI_API_KEY') or '').strip(),
+        'max_sections': int(llm.get('max_sections') or 12),
+        'max_candidates_per_section': int(llm.get('max_candidates_per_section') or 5),
+        'timeout': int(llm.get('timeout_seconds') or 120),
+    }
+
+
+def llm_extractor_prompt():
+    prompt_path = ROOT/'config/prompts/evidence_extractor.md'
+    base = ''
+    if prompt_path.exists():
+        base = read_text_compat(prompt_path).strip()
+    schema_instruction = (
+        'Return ONLY a JSON array. Each item: {"claim": <one-sentence claim in the paper\'s language>, '
+        '"exact_quote": <VERBATIM sentence copied character-for-character from the section text>, '
+        '"claim_type": one of ["method","finding","limitation","definition","background"]}. '
+        'The exact_quote MUST be copied exactly from the provided text — never paraphrase, never translate, '
+        'never merge sentences. Items whose exact_quote is not found verbatim in the source are discarded.'
+    )
+    return (base + '\n\n' + schema_instruction).strip()
+
+
+def llm_chat_completion(cfg, system_prompt, user_prompt):
+    body = json.dumps({
+        'model': cfg['model'],
+        'messages': [
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': user_prompt},
+        ],
+        'temperature': 0,
+    }).encode('utf-8')
+    req = urllib.request.Request(
+        cfg['base_url'] + '/chat/completions',
+        data=body,
+        headers={
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + cfg['api_key'],
+            'User-Agent': 'PaperOps/0.2',
+        },
+        method='POST',
+    )
+    last_error = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=cfg['timeout']) as resp:
+                payload = json.loads(resp.read().decode('utf-8', 'replace'))
+            return payload['choices'][0]['message']['content']
+        except urllib.error.HTTPError as e:
+            last_error = e
+            if e.code in (429, 500, 502, 503) and attempt < 2:
+                time.sleep(3.0 * (2 ** attempt))
+                continue
+            raise
+        except (KeyError, IndexError, json.JSONDecodeError) as e:
+            raise RuntimeError(f'unexpected LLM response shape: {e}')
+    raise last_error
+
+
+def parse_llm_candidate_json(text):
+    """Parse the model output into a list of dicts. Tolerates code fences and stray prose
+    around the JSON array; anything unparseable returns []."""
+    text = str(text or '').strip()
+    fence = re.search(r'```(?:json)?\s*(\[.*?\])\s*```', text, re.S)
+    if fence:
+        text = fence.group(1)
+    else:
+        start = text.find('[')
+        end = text.rfind(']')
+        if start != -1 and end > start:
+            text = text[start:end + 1]
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    out = []
+    for item in data:
+        if isinstance(item, dict) and str(item.get('exact_quote') or '').strip():
+            out.append(item)
+    return out
+
+
+def normalize_for_verbatim(text):
+    return ' '.join(str(text or '').split())
+
+
+def quote_is_verbatim(quote, section_text):
+    """Anti-hallucination gate: the quote must appear in the section text after
+    whitespace normalization only. No fuzzy matching — a paraphrase is a fail."""
+    q = normalize_for_verbatim(quote)
+    return bool(q) and q in normalize_for_verbatim(section_text)
+
+
+def write_llm_extraction_report(result):
+    out = ROOT/f'reports/audit_reports/llm_evidence_extraction_{today()}.md'
+    out.parent.mkdir(parents=True, exist_ok=True)
+    lines = [f'# LLM Evidence Extraction {today()}\n', '## Summary\n']
+    for key in ['paper_id', 'citekey', 'mode', 'model', 'sections_sent', 'proposed_count', 'verbatim_ok_count', 'dropped_non_verbatim_count', 'dropped_invalid_count', 'merged_count', 'evidence_matrix_row_count_before', 'evidence_matrix_row_count_after']:
+        lines.append(f'- {key}: {result.get(key)}\n')
+    lines.append('\n## Dropped (non-verbatim — model paraphrased or invented these)\n')
+    lines.extend([f'- {q[:200]}\n' for q in result.get('dropped_quotes', [])[:50]] or ['- none\n'])
+    lines.append('\n## Governance\n')
+    lines.append('- Every accepted candidate was verbatim-verified against the GROBID-parsed section text.\n')
+    lines.append('- All candidates enter the review queue with verified=false; the human review, promotion-plan, and guarded-apply gates are unchanged.\n')
+    lines.append('- The LLM cannot write to the Evidence Matrix, set verified, or bypass any gate.\n')
+    lines.append('\n## Errors\n')
+    lines.extend([f'- {e}\n' for e in result.get('errors', [])] or ['- none\n'])
+    out.write_text(''.join(lines), encoding='utf-8')
+    return out
+
+
+def cmd_extract_evidence_llm(args):
+    if args.apply and args.dry_run:
+        raise SystemExit('ERROR: --apply and --dry-run cannot be used together')
+    if not args.apply and not args.dry_run:
+        raise SystemExit('ERROR: choose --dry-run or --apply')
+    cfg = llm_config()
+    if not cfg['api_key']:
+        raise SystemExit('ERROR: OPENAI_API_KEY is not set (an OpenAI-compatible endpoint can be configured via OPENAI_BASE_URL / config/pipeline.yaml llm.base_url)')
+    artifact_dir = ROOT/'data/parsed/grobid'/slug(args.paper_id, 80)
+    sections_path = artifact_dir/'sections.json'
+    if not sections_path.exists():
+        raise SystemExit(f'ERROR: missing GROBID sections artifact: {path_for_report(sections_path)}; run parse-grobid --paper-id {args.paper_id} --apply first')
+    errors = []
+    sections_data = read_json_file(sections_path, errors)
+    if errors:
+        raise SystemExit('ERROR: ' + '; '.join(errors))
+    citekey = sections_data.get('citekey') or ''
+    sections = [s for s in (sections_data.get('sections') or []) if str(s.get('text') or '').strip()][:cfg['max_sections']]
+    before = file_row_count(ROOT/'matrices/evidence_matrix.csv')
+    system_prompt = llm_extractor_prompt()
+    created = now()
+    proposed = 0
+    verbatim_rows = []
+    dropped_quotes = []
+    dropped_invalid = 0
+    for section in sections:
+        text = str(section.get('text') or '')[:12000]
+        user_prompt = (
+            f'Paper section (id={section.get("section_id")}, heading="{section.get("heading")}"):\n\n{text}\n\n'
+            f'Extract up to {cfg["max_candidates_per_section"]} evidence candidates as the JSON array described.'
+        )
+        try:
+            raw = llm_chat_completion(cfg, system_prompt, user_prompt)
+        except Exception as e:
+            errors.append(f'section {section.get("section_id")}: LLM call failed: {e}')
+            continue
+        items = parse_llm_candidate_json(raw)
+        proposed += len(items)
+        for item in items[:cfg['max_candidates_per_section']]:
+            quote = str(item.get('exact_quote') or '').strip()
+            claim = str(item.get('claim') or '').strip() or quote[:300]
+            claim_type = str(item.get('claim_type') or '').strip()
+            if claim_type not in EVIDENCE_CANDIDATE_CLAIM_TYPES:
+                claim_type = 'background'
+            if not quote_is_verbatim(quote, section.get('text') or ''):
+                dropped_quotes.append(quote)
+                continue
+            if len(normalize_for_verbatim(quote)) < 20:
+                dropped_invalid += 1
+                continue
+            row = make_candidate({
+                'paper_id': args.paper_id,
+                'citekey': citekey,
+                'source_artifact': 'sections.json',
+                'section_id': section.get('section_id') or '',
+                'section_heading': section.get('heading') or '',
+                'claim_type': claim_type,
+                'claim': claim,
+                'quote': normalize_for_verbatim(quote),
+                'page': '',
+                'confidence': '0.60',
+                'reason': f'llm_extractor model={cfg["model"]}; verbatim-checked against sections.json',
+                'use_in_section': candidate_type_for(section.get('heading') or '', quote, 'sections.json')[1],
+                'created_at': created,
+            })
+            verbatim_rows.append(row)
+    merged_count = 0
+    out_csv = ROOT/'matrices/evidence_candidates.csv'
+    if args.apply and verbatim_rows:
+        existing = read_evidence_candidates(out_csv)
+        existing_by_id = {r.get('candidate_id'): r for r in existing if r.get('candidate_id')}
+        for row in verbatim_rows:
+            row['verified'] = 'false'
+            if row['candidate_id'] not in existing_by_id:
+                merged_count += 1
+            existing_by_id[row['candidate_id']] = row
+        write_evidence_candidates(out_csv, list(existing_by_id.values()))
+    after = file_row_count(ROOT/'matrices/evidence_matrix.csv')
+    if after != before:
+        errors.append('evidence_matrix.csv row count changed; this command must never touch it')
+    result = {
+        'paper_id': args.paper_id,
+        'citekey': citekey,
+        'mode': 'apply' if args.apply else 'dry-run',
+        'model': cfg['model'],
+        'sections_sent': len(sections),
+        'proposed_count': proposed,
+        'verbatim_ok_count': len(verbatim_rows),
+        'dropped_non_verbatim_count': len(dropped_quotes),
+        'dropped_invalid_count': dropped_invalid,
+        'merged_count': merged_count,
+        'evidence_matrix_row_count_before': before,
+        'evidence_matrix_row_count_after': after,
+        'dropped_quotes': dropped_quotes,
+        'errors': errors,
+    }
+    report = write_llm_extraction_report(result)
+    print(report)
+    for key in ['mode', 'sections_sent', 'proposed_count', 'verbatim_ok_count', 'dropped_non_verbatim_count', 'merged_count']:
+        print(f'{key}={result.get(key)}')
+    log(f"extract-evidence-llm {result['mode']} 실행: paper_id={args.paper_id}, verbatim_ok={len(verbatim_rows)}/{proposed}, errors={len(errors)}")
+    if errors:
+        raise SystemExit(1)
+
+
+def cmd_make_page_metadata_preview(args):
+    """Generates the page-metadata patch preview that apply-page-metadata consumes —
+    previously this strictly-validated file had NO producer in the repo. Prefills only
+    single-page, high/medium-confidence locator hits; the human edits/removes rows
+    before running apply-page-metadata."""
+    locator_csv = resolve_root_path(args.from_locator) if args.from_locator else ROOT/f'reports/review/pdf_page_locator_candidates_{today()}.csv'
+    if not locator_csv.exists():
+        raise SystemExit(f'ERROR: missing locator CSV: {path_for_report(locator_csv)}; run locate-pdf-pages first')
+    rows, _ = read_csv_dict(locator_csv)
+    matrix_by_id = {str(r.get('evidence_id') or '').strip(): r for r in read_evidence_for_audit() if str(r.get('evidence_id') or '').strip()}
+    out_rows = []
+    skipped = 0
+    for row in rows:
+        pages = str(row.get('candidate_pages') or '').strip()
+        count = int(row.get('candidate_page_count') or 0)
+        if count != 1 or not pages:
+            skipped += 1
+            continue
+        evidence_id = str(row.get('evidence_id') or '').strip()
+        target = matrix_by_id.get(evidence_id) or {}
+        existing_location = str(target.get('source_location') or '').strip()
+        proposed_location = f'pdf_page={pages}'
+        if existing_location and 'pdf_page=' not in existing_location:
+            proposed_location = f'pdf_page={pages}; {existing_location}'
+        out_rows.append({
+            'candidate_id': row.get('candidate_id') or '',
+            'evidence_id': evidence_id,
+            'proposed_page': pages,
+            'proposed_source_location': proposed_location,
+            'verified_should_remain': 'false',
+        })
+    out_path = resolve_root_path(args.output) if args.output else ROOT/f'matrices/evidence_matrix_page_metadata_patch_preview_{today()}.csv'
+    atomic_write_csv(out_path, PAGE_METADATA_PATCH_REQUIRED_FIELDS, out_rows)
+    print(out_path)
+    print(f'prefilled_rows={len(out_rows)}')
+    print(f'skipped_rows={skipped} (multi-page or not found; resolve manually)')
+    print('NEXT: review/edit the CSV by hand, then run: apply-page-metadata --from-preview '
+          + path_for_report(out_path) + ' --dry-run')
+    log(f'make-page-metadata-preview 실행: prefilled={len(out_rows)}, skipped={skipped}')
+
+
+def cmd_make_outline_insertion_template(args):
+    """Generates a starter manuscript_outline_insertion_preview CSV (the input of
+    manuscript-patch-preview) — previously undocumented and producer-less. Ships one
+    example row per promoted evidence row's use_in_section, all flagged as requiring
+    PM approval, with auto-insert disallowed."""
+    out_path = resolve_root_path(args.output) if args.output else ROOT/f'reports/review/manuscript_outline_insertion_preview_{today()}.csv'
+    promoted = promoted_evidence_rows(getattr(args, 'paper_id', None), None)
+    out_rows = []
+    for index, row in enumerate(promoted[:int(args.limit)], 1):
+        quote = str(row.get('exact_quote') or row.get('quote') or '').strip()
+        citekey_value = str(row.get('citekey') or '').strip()
+        out_rows.append({
+            'preview_id': f'ins_{today().replace("-", "")}_{index:03d}',
+            'target_file': '05_manuscript/chapters/ch2_literature.qmd',
+            'target_heading': '## Related Work',
+            'paragraph_role': 'evidence_supported_paragraph',
+            'evidence_ids': str(row.get('evidence_id') or ''),
+            'pages': str(row.get('page') or ''),
+            'proposed_paragraph': f'[DRAFT — edit before preview] {quote[:300]} [@{citekey_value}]',
+            'guard': 'verified remains false until human PDF check; citation must exist in references.bib',
+            'manuscript_auto_insert_allowed': 'false',
+            'requires_pm_approval': 'true',
+        })
+    atomic_write_csv(out_path, MANUSCRIPT_PREVIEW_REQUIRED_FIELDS, out_rows)
+    print(out_path)
+    print(f'template_rows={len(out_rows)}')
+    print('NEXT: edit target_file/target_heading/proposed_paragraph by hand, then run: '
+          'manuscript-patch-preview --from-preview ' + path_for_report(out_path))
+    log(f'make-outline-insertion-template 실행: rows={len(out_rows)}')
+
+
 def should_backup_file(path):
     parts = {p.lower() for p in path.parts}
     if '.venv' in parts:
@@ -4427,7 +5048,8 @@ def should_backup_file(path):
 
 
 def cmd_backup(args):
-    include_dirs = ['scripts', 'config', 'docs', 'matrices', 'manuscript', 'research_design', 'reports', 'notes']
+    # data/metadata carries papers.sqlite — previously the DB was in NO backup at all.
+    include_dirs = ['scripts', 'config', 'docs', 'matrices', 'manuscript', '05_manuscript', 'research_design', 'reports', 'notes', 'data/metadata', 'tests']
     out_dir = ROOT/'backups'
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir/f"paperops_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
@@ -4527,12 +5149,16 @@ def stable_evidence_id(row, row_index, seen):
 
 
 def normalized_verified(value):
+    """GOVERNANCE INVARIANT: automation may only ever preserve an exact literal 'true'
+    that a human already wrote. Truthy variants like '1', 'yes', 'TRUE-from-Excel'
+    are demoted to 'false' — a migration must never be the step that flips a row to
+    verified. Demotions are reported by cmd_migrate_evidence."""
     text = str(value or '').strip().lower()
-    if text in ('true', 'false'):
-        return text
-    if text in ('1', 'yes', 'y'):
-        return 'true'
-    return 'false'
+    return 'true' if text == 'true' else 'false'
+
+
+def verified_value_is_ambiguous(value):
+    return str(value or '').strip().lower() in ('1', 'yes', 'y', 't', 'on')
 
 
 def cmd_migrate_evidence(args):
@@ -4545,10 +5171,7 @@ def cmd_migrate_evidence(args):
     backup = backup_dir/f'evidence_matrix_{stamp}.csv'
     shutil.copy2(ev, backup)
 
-    with ev.open(encoding='utf-8', newline='') as f:
-        reader = csv.DictReader(f)
-        original_columns = list(reader.fieldnames or [])
-        rows = list(reader)
+    rows, original_columns = read_csv_dict(ev)
 
     fieldnames = list(original_columns)
     added_columns = [c for c in EVIDENCE_REQUIRED_COLUMNS if c not in fieldnames]
@@ -4558,6 +5181,7 @@ def cmd_migrate_evidence(args):
         added_columns.append('verified')
 
     seen_ids = set()
+    demoted_truthy_rows = []
     for index, row in enumerate(rows, 1):
         for col in fieldnames:
             row.setdefault(col, '')
@@ -4579,12 +5203,11 @@ def cmd_migrate_evidence(args):
             row['source_location'] = '; '.join(location_parts)
         if not row.get('extraction_method'):
             row['extraction_method'] = 'legacy_migration'
+        if verified_value_is_ambiguous(row.get('verified')):
+            demoted_truthy_rows.append(row.get('evidence_id') or f'row_{index}')
         row['verified'] = normalized_verified(row.get('verified'))
 
-    with ev.open('w', encoding='utf-8', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
+    atomic_write_csv(ev, fieldnames, rows)
 
     ids = [r.get('evidence_id') for r in rows if r.get('evidence_id')]
     duplicate_ids = sorted(k for k, v in count_values(ids).items() if v > 1)
@@ -4613,9 +5236,12 @@ def cmd_migrate_evidence(args):
         lines.append(f'- `{col}`\n')
     lines.append('\n## Rules Applied\n')
     lines.append('- Existing rows and columns were preserved.\n')
-    lines.append('- `verified` values were preserved when already true/false; missing or ambiguous values defaulted to false.\n')
+    lines.append('- `verified` was preserved only when it was exactly the literal `true` or `false`.\n')
+    lines.append('- Truthy variants (`1`, `yes`, `y`, `t`, `on` — e.g. from Excel) were DEMOTED to `false` and listed below; migration never promotes a row to verified.\n')
     lines.append('- `exact_quote` was filled from legacy `quote` when available.\n')
     lines.append('- `evidence_id` was generated from paper_id, citekey, claim_type, claim, and quote/exact_quote.\n')
+    lines.append(f'\n## Truthy Values Demoted To false ({len(demoted_truthy_rows)})\n')
+    lines.extend([f'- `{rid}`\n' for rid in demoted_truthy_rows[:100]] or ['- none\n'])
     if duplicate_ids:
         lines.append('\n## Duplicate Evidence IDs\n')
         for evidence_id in duplicate_ids[:100]:
@@ -4640,11 +5266,7 @@ def db_citekeys():
 
 
 def read_evidence_for_audit():
-    ev = ROOT/'matrices/evidence_matrix.csv'
-    if not ev.exists():
-        return []
-    with ev.open(encoding='utf-8', newline='') as f:
-        return list(csv.DictReader(f))
+    return read_csv_dict(ROOT/'matrices/evidence_matrix.csv')[0]
 
 
 def parse_bib_citekeys(path):
@@ -4663,6 +5285,8 @@ def manuscript_citekeys():
             continue
         for path in root.rglob('*'):
             if not path.is_file() or path.suffix.lower() not in ('.md', '.qmd', '.tex'):
+                continue
+            if 'backups' in path.parts:
                 continue
             text = path.read_text(encoding='utf-8', errors='ignore')
             for citekey in pattern.findall(text):
@@ -4832,11 +5456,27 @@ def parse_bib_entries(path):
             'citekey': citekey,
             'title': fields.get('title', ''),
             'doi': normalize_doi(fields.get('doi', '')),
-            'arxiv_id': normalize_arxiv(fields.get('eprint') or fields.get('arxiv') or fields.get('arxivid') or fields.get('archiveprefix', '') if fields.get('archiveprefix', '').lower() == 'arxiv' else fields.get('eprint', '')),
+            'arxiv_id': bib_entry_arxiv_id(fields),
             'title_norm': norm_title(fields.get('title', '')),
             'fields': fields,
         })
     return entries
+
+
+ARXIV_ID_PATTERN = re.compile(r'^(\d{4}\.\d{4,5}(v\d+)?|[a-z-]+(\.[A-Z]{2})?/\d{7}(v\d+)?)$', re.I)
+
+
+def bib_entry_arxiv_id(fields):
+    """Extract an arXiv id from BibTeX fields. Fixes the old precedence bug that could
+    return the literal string 'arxiv' and treated any non-arXiv eprint as an arXiv id."""
+    raw = str(fields.get('eprint') or fields.get('arxiv') or fields.get('arxivid') or '').strip()
+    if not raw:
+        return ''
+    archive_prefix = str(fields.get('archiveprefix') or '').strip().lower()
+    if archive_prefix and archive_prefix != 'arxiv':
+        return ''
+    candidate = normalize_arxiv(raw)
+    return candidate if ARXIV_ID_PATTERN.match(candidate) else ''
 
 
 def normalize_doi(value):
@@ -4881,6 +5521,8 @@ def db_backup_path():
 
 
 def cmd_sync_zotero(args):
+    if args.apply and args.dry_run:
+        raise SystemExit('ERROR: --apply and --dry-run cannot be used together')
     init_db()
     bib = ROOT/args.bib
     legacy_bib = ROOT/'manuscript/references.bib'
@@ -4912,14 +5554,37 @@ def cmd_sync_zotero(args):
         apply_requested = False
     if apply_requested and duplicate_targets:
         apply_requested = False
+    matrix_updated_rows = 0
+    matrix_backup = ''
     if apply_requested and candidates:
         backup_path = db_backup_path()
         shutil.copy2(DB, backup_path)
         backup = str(backup_path)
+        renames_by_paper_id = {}
         for entry, row, method in candidates:
             c.execute('UPDATE papers SET citekey=?, updated_at=? WHERE id=?', (entry['citekey'], now(), row['id']))
+            renames_by_paper_id[row['id']] = entry['citekey']
             applied += 1
         c.commit()
+        # Propagate citekey renames into the Evidence Matrix so promotion/audit commands
+        # do not immediately fail with citekey_not_found against the new canonical keys.
+        ev = ROOT/'matrices/evidence_matrix.csv'
+        if ev.exists() and renames_by_paper_id:
+            matrix_rows, matrix_fields = read_evidence_matrix_with_header()
+            changed = False
+            for row in matrix_rows:
+                new_key = renames_by_paper_id.get(str(row.get('paper_id') or '').strip())
+                if new_key and str(row.get('citekey') or '') != new_key:
+                    row['citekey'] = new_key
+                    matrix_updated_rows += 1
+                    changed = True
+            if changed:
+                backup_dir = ROOT/'matrices/backups'
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                mb = backup_dir/f'evidence_matrix_before_citekey_sync_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+                shutil.copy2(ev, mb)
+                matrix_backup = path_for_report(mb)
+                atomic_write_csv(ev, matrix_fields, matrix_rows)
     c.close()
 
     report = ROOT/f'reports/audit_reports/zotero_sync_{today()}.md'
@@ -4938,9 +5603,12 @@ def cmd_sync_zotero(args):
         f'- unmatched_db_papers: {len(unmatched_db)}\n',
         f'- duplicate_target_citekeys: {len(duplicate_targets)}\n',
         f'- applied_changes: {applied}\n',
+        f'- evidence_matrix_citekey_rows_updated: {matrix_updated_rows}\n',
     ]
     if backup:
         lines.append(f'- db_backup: `{backup}`\n')
+    if matrix_backup:
+        lines.append(f'- evidence_matrix_backup: `{matrix_backup}`\n')
     if canonical_empty:
         lines += [
             '\n## WARN: Canonical Bib Is Empty\n',
@@ -5071,7 +5739,9 @@ This file is the Quarto entrypoint. Chapter files live under `chapters/`.
 
 
 def smoke_run(args):
-    result = subprocess.run([sys.executable, 'scripts/paperops.py'] + args, cwd=str(ROOT), capture_output=True, text=True, timeout=180)
+    env = dict(os.environ)
+    env['PYTHONIOENCODING'] = 'utf-8'
+    result = subprocess.run([sys.executable, 'scripts/paperops.py'] + args, cwd=str(ROOT), capture_output=True, encoding='utf-8', errors='replace', timeout=180, env=env)
     return {
         'command': 'python scripts/paperops.py ' + ' '.join(args),
         'returncode': result.returncode,
@@ -5126,12 +5796,13 @@ def main():
     p=sub.add_parser('parse-grobid'); p.add_argument('--limit', type=int, default=5); p.add_argument('--paper-id'); p.add_argument('--pdf'); p.add_argument('--apply', action='store_true'); p.add_argument('--dry-run', action='store_true'); p.set_defaults(func=cmd_parse_grobid)
     p=sub.add_parser('validate-grobid-artifacts'); p.add_argument('--paper-id'); p.add_argument('--path'); p.set_defaults(func=cmd_validate_grobid_artifacts)
     p=sub.add_parser('extract-evidence-candidates'); p.add_argument('--paper-id', required=True); p.add_argument('--apply', action='store_true'); p.add_argument('--dry-run', action='store_true'); p.set_defaults(func=cmd_extract_evidence_candidates)
+    p=sub.add_parser('extract-evidence-llm', help='LLM-proposed evidence candidates; every quote verbatim-checked, same human gates'); p.add_argument('--paper-id', required=True); p.add_argument('--apply', action='store_true'); p.add_argument('--dry-run', action='store_true'); p.set_defaults(func=cmd_extract_evidence_llm)
     p=sub.add_parser('validate-evidence-candidates'); p.add_argument('--paper-id'); p.set_defaults(func=cmd_validate_evidence_candidates)
     p=sub.add_parser('review-evidence-candidates'); p.add_argument('--paper-id', required=True); p.add_argument('--min-confidence', type=float); p.add_argument('--use-in-section', choices=sorted(EVIDENCE_CANDIDATE_USE_SECTIONS)); p.add_argument('--claim-type', choices=sorted(EVIDENCE_CANDIDATE_CLAIM_TYPES)); p.set_defaults(func=cmd_review_evidence_candidates)
     p=sub.add_parser('validate-review-queue'); p.add_argument('--paper-id'); p.set_defaults(func=cmd_validate_review_queue)
     p=sub.add_parser('test-review-preservation'); p.add_argument('--paper-id', required=True); p.set_defaults(func=cmd_test_review_preservation)
     p=sub.add_parser('promotion-plan'); p.add_argument('--paper-id'); p.add_argument('--candidate-id'); p.add_argument('--dry-run', action='store_true'); p.set_defaults(func=cmd_promotion_plan)
-    p=sub.add_parser('promote-evidence'); p.add_argument('--from-preview', default='matrices/evidence_matrix_patch_preview.csv'); p.add_argument('--paper-id'); p.add_argument('--candidate-id'); p.add_argument('--dry-run', action='store_true'); p.add_argument('--apply', action='store_true'); p.set_defaults(func=cmd_promote_evidence)
+    p=sub.add_parser('promote-evidence'); p.add_argument('--from-preview', default='matrices/evidence_matrix_patch_preview.csv'); p.add_argument('--paper-id'); p.add_argument('--candidate-id'); p.add_argument('--dry-run', action='store_true'); p.add_argument('--apply', action='store_true'); p.add_argument('--ready-only', action='store_true', help='apply ready rows even when other selected rows are blocked'); p.set_defaults(func=cmd_promote_evidence)
     p=sub.add_parser('audit-promoted-evidence'); p.add_argument('--paper-id'); p.add_argument('--candidate-id'); p.set_defaults(func=cmd_audit_promoted_evidence)
     p=sub.add_parser('extract-promoted-rows'); p.add_argument('--since'); p.add_argument('--output', default=f'reports/review/promoted_rows_external_review_input_{today()}.csv'); p.add_argument('--paper-id'); p.add_argument('--candidate-id'); p.set_defaults(func=cmd_extract_promoted_rows)
     p=sub.add_parser('mark-pdf-check-required'); p.add_argument('--promoted-only', action='store_true'); p.add_argument('--paper-id'); p.add_argument('--candidate-id'); p.add_argument('--dry-run', action='store_true'); p.set_defaults(func=cmd_mark_pdf_check_required)
@@ -5139,9 +5810,12 @@ def main():
     p=sub.add_parser('guard-no-auto-verified'); p.add_argument('--promoted-only', action='store_true'); p.add_argument('--paper-id'); p.add_argument('--candidate-id'); p.add_argument('--allow-approved-manuscript-changes', action='store_true'); p.add_argument('--manuscript-apply-report'); p.set_defaults(func=cmd_guard_no_auto_verified)
     p=sub.add_parser('update-promoted-row-review-metadata'); p.add_argument('--input', default=f'reports/review/promoted_rows_external_review_input_{today()}.csv'); p.add_argument('--output', default=f'reports/review/promoted_rows_row_level_review_decisions_{today()}.csv'); p.add_argument('--patch-preview', default=f'matrices/evidence_matrix_metadata_patch_preview_{today()}.csv'); p.add_argument('--dry-run', action='store_true'); p.set_defaults(func=cmd_update_promoted_row_review_metadata)
     p=sub.add_parser('guard-paperops-overclaim'); p.add_argument('--promoted-only', action='store_true'); p.add_argument('--paper-id'); p.add_argument('--candidate-id'); p.set_defaults(func=cmd_guard_paperops_overclaim)
+    p=sub.add_parser('verify-evidence', help='THE human gate: set verified=true for one row, recorded in the verification ledger'); p.add_argument('--evidence-id', required=True); p.add_argument('--by', required=True, help='your name; recorded in the ledger'); p.add_argument('--method', default='human_pdf_check'); p.add_argument('--note', default=''); p.add_argument('--attest', action='store_true', help='confirm you personally checked quote/page/meaning against the original source'); p.add_argument('--revoke', action='store_true', help='revert a row to verified=false'); p.set_defaults(func=cmd_verify_evidence)
     p=sub.add_parser('pdf-page-verification-sheet'); p.add_argument('--promoted-only', action='store_true'); p.add_argument('--paper-id'); p.add_argument('--candidate-id'); p.add_argument('--output', default=f'reports/review/pdf_page_verification_sheet_{today()}.csv'); p.set_defaults(func=cmd_pdf_page_verification_sheet)
     p=sub.add_parser('locate-pdf-pages'); p.add_argument('--promoted-only', action='store_true'); p.add_argument('--paper-id'); p.add_argument('--candidate-id'); p.add_argument('--output', default=f'reports/review/pdf_page_locator_candidates_{today()}.csv'); p.set_defaults(func=cmd_locate_pdf_pages)
+    p=sub.add_parser('make-page-metadata-preview', help='prefill the page metadata patch preview from locate-pdf-pages output'); p.add_argument('--from-locator'); p.add_argument('--output'); p.set_defaults(func=cmd_make_page_metadata_preview)
     p=sub.add_parser('apply-page-metadata'); p.add_argument('--from-preview', default=f'matrices/evidence_matrix_page_metadata_patch_preview_{today()}.csv'); p.add_argument('--dry-run', action='store_true'); p.add_argument('--apply', action='store_true'); p.set_defaults(func=cmd_apply_page_metadata)
+    p=sub.add_parser('make-outline-insertion-template', help='generate a starter manuscript insertion preview for manuscript-patch-preview'); p.add_argument('--paper-id'); p.add_argument('--limit', default=10); p.add_argument('--output'); p.set_defaults(func=cmd_make_outline_insertion_template)
     p=sub.add_parser('manuscript-patch-preview'); p.add_argument('--from-preview', default=f'reports/review/manuscript_outline_insertion_preview_{today()}.csv'); p.add_argument('--output-prefix'); p.set_defaults(func=cmd_manuscript_patch_preview)
     p=sub.add_parser('apply-manuscript-patch'); p.add_argument('--from-preview', default=f'reports/review/manuscript_patch_preview_{today()}.csv'); p.add_argument('--output-prefix'); p.add_argument('--dry-run', action='store_true'); p.add_argument('--apply', action='store_true'); p.set_defaults(func=cmd_apply_manuscript_patch)
     sub.add_parser('backup').set_defaults(func=cmd_backup)

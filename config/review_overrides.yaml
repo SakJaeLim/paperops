@@ -1,0 +1,95 @@
+# Row-level external review decisions for promoted evidence rows.
+# Moved out of code (v0.2.0): these are per-candidate HUMAN/PM review decisions for a
+# specific author corpus. Other users: replace `decisions` with your own, or leave empty —
+# unknown candidate_ids fall back to `default_decision` (conservative: downgrade_to_pdf_check).
+source_review: GPT Pro row-level review captured 2026-06-04
+default_decision:
+  external_review_decision: downgrade_to_pdf_check
+  suggested_claim_type: ''
+  suggested_use_in_section: ''
+  rewrite_if_needed: ''
+  pdf_check_priority: high
+  paperops_generalization_allowed: 'false'
+  pdf_page_check_required: 'true'
+  domain_specific_risk: unknown
+decisions:
+  fb5137d2707f5e1d:
+    external_review_decision: downgrade_to_pdf_check
+    suggested_claim_type: evaluation_pattern
+    suggested_use_in_section: ch2_related_work;ch3_evaluation_design_motivation
+    rewrite_if_needed: ChronoMedKG 사례는 LLM judge가 아닌 gold-standard comparison을 평가
+      설계에 활용한 도메인 특화 사례를 보여준다.
+    pdf_check_priority: high
+    paperops_generalization_allowed: 'false'
+    pdf_page_check_required: 'true'
+    domain_specific_risk: high
+  23fe8ed59649fffa:
+    external_review_decision: revise
+    suggested_claim_type: method_pattern
+    suggested_use_in_section: ch2_related_work;ch3_design_motivation
+    rewrite_if_needed: 도메인 특화 KG 연구에서 disease-autonomous multi-agent pipeline이 대규모
+      biomedical triples 생성에 활용된 사례가 있다.
+    pdf_check_priority: high
+    paperops_generalization_allowed: 'false'
+    pdf_page_check_required: 'true'
+    domain_specific_risk: high
+  d5f10096ff325472:
+    external_review_decision: revise
+    suggested_claim_type: method_pattern
+    suggested_use_in_section: ch2_related_work;ch3_design_motivation
+    rewrite_if_needed: ChronoMedKG는 각 질병 단위를 독립적으로 처리하는 multi-stage pipeline 구조를 채택했다.
+      이는 도메인 단위 batch/agent pipeline 설계 사례로 참고할 수 있다.
+    pdf_check_priority: medium
+    paperops_generalization_allowed: 'false'
+    pdf_page_check_required: 'true'
+    domain_specific_risk: medium
+  e340369a59fb2532:
+    external_review_decision: revise
+    suggested_claim_type: agent_workflow_pattern
+    suggested_use_in_section: ch2_related_work;ch3_system_design_motivation
+    rewrite_if_needed: 특정 biomedical KG 구축 사례에서는 disease identifier를 입력으로 네 개의 협력
+      agent가 end-to-end pipeline을 수행하도록 설계했다.
+    pdf_check_priority: medium
+    paperops_generalization_allowed: 'false'
+    pdf_page_check_required: 'true'
+    domain_specific_risk: medium
+  06488bdee4bc0074:
+    external_review_decision: keep
+    suggested_claim_type: governance
+    suggested_use_in_section: ch3_system_design;ch5_evaluation_design
+    rewrite_if_needed: 검증 harness, judge-panel code, error taxonomy를 공개하는 방식은 연구 자동화
+      시스템의 auditability와 reproducibility를 높이는 설계 패턴으로 볼 수 있다.
+    pdf_check_priority: medium
+    paperops_generalization_allowed: limited_auditability_design_principle_only
+    pdf_page_check_required: 'true'
+    domain_specific_risk: low
+  154a4607cb42751c:
+    external_review_decision: revise
+    suggested_claim_type: provenance_pattern
+    suggested_use_in_section: ch2_related_work;ch3_evidence_model_design
+    rewrite_if_needed: ChronoMedKG는 triple 단위에 evidence grading과 PMID provenance를
+      부여하는 방식으로 출처 추적성을 강화한 사례다.
+    pdf_check_priority: high
+    paperops_generalization_allowed: 'false'
+    pdf_page_check_required: 'true'
+    domain_specific_risk: high
+  6abed7fd8c1bd310:
+    external_review_decision: revise
+    suggested_claim_type: human_oversight
+    suggested_use_in_section: ch2_related_work;ch3_governance_design;ch6_limitations
+    rewrite_if_needed: 도메인 특화 자동화 시스템도 원천 데이터 범위와 실제 적용 범위를 구분하며, 고위험 도메인 적용에는 인간
+      전문가 검토와 별도 평가가 필요하다는 제한을 명시한다.
+    pdf_check_priority: medium
+    paperops_generalization_allowed: 'false'
+    pdf_page_check_required: 'true'
+    domain_specific_risk: high
+  67558897e8bfbc54:
+    external_review_decision: revise
+    suggested_claim_type: validation_boundary
+    suggested_use_in_section: ch3_evaluation_design;ch5_evaluation_limitations;ch6_limitations
+    rewrite_if_needed: text-grounding 검증은 원문 근거 일치 여부를 확인하는 절차이지, 도메인 사실 자체의 독립적 재검증은
+      아니라는 한계를 명확히 해야 한다.
+    pdf_check_priority: medium
+    paperops_generalization_allowed: limited_validation_boundary_principle_only
+    pdf_page_check_required: 'true'
+    domain_specific_risk: medium

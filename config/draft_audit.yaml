@@ -1,0 +1,63 @@
+# Draft audit configuration (used by scripts/paperops_draft_audit.py).
+#
+# Loaded if present and merged over the neutral built-in defaults; the tool
+# degrades gracefully to those defaults when this file or PyYAML is missing.
+# Entries are Python regex fragments (single-quote them so backslashes
+# survive YAML); invalid regexes are treated as literal strings.
+#
+# Schema:
+#   source_mentions:    list of source-name regexes — a sentence mentioning
+#                       one of these counts as "has a source", and matches
+#                       are inventoried against the Evidence Matrix
+#   required_chapters:  list of {name, patterns} — the structure check marks
+#                       a chapter [OK] only when one of its patterns matches
+#                       a heading line (never body prose)
+#   overclaim_extra:    extra overclaim regexes added to the built-in
+#                       Korean/English detectors
+#   strong_claim_extra: extra strong-claim regexes added to the built-in
+#                       Korean/English detectors
+#
+# The values below are the current author's (thesis on ontology-based AX
+# governance); replace them with your own topic's sources and structure.
+
+source_mentions:
+  - 'Ontology Development 101'
+  - 'FEEKG'
+  - 'FinCaKG-?Onto'
+  - 'FinCaKG'
+  - 'FintechKG'
+  - 'W3C'
+  - 'SHACL Recommendation'
+  - 'SHACL'
+  - 'GQL'
+  - 'ISO/IEC\s*39075(:2024)?'
+  - 'ISO/IEC\s*\d+'
+  - 'Neo4j'
+  - 'Cypher Manual'
+  - 'Cypher'
+  - 'OPEN DART'
+  - 'KRX'
+  - 'FRED'
+  - 'ECOS'
+  - 'Data\.go\.kr'
+
+required_chapters:
+  - name: '서론'
+    patterns: ['서\s*론', 'Introduction']
+  - name: '관련연구'
+    patterns: ['관련\s*연구', '선행\s*연구', 'Related Work']
+  - name: '연구설계/방법'
+    patterns: ['연구\s*설계', '연구\s*방법', '방법론', 'Method']
+  - name: '아티팩트/온톨로지 설계'
+    patterns: ['온톨로지\s*설계', '시스템\s*설계', 'Ontology', 'Design']
+  - name: '평가/검증'
+    patterns: ['평가', '검증', 'Evaluation', 'Validation']
+  - name: '결론'
+    patterns: ['결\s*론', 'Conclusion']
+  - name: '참고문헌'
+    patterns: ['참고\s*문헌', 'References', '원문\s*확인']
+
+overclaim_extra:
+  - 'hallucination[을를]?\s*제거'
+
+strong_claim_extra: []

@@ -1,5 +1,10 @@
-user_agent: "PaperOps/0.1 (mailto:your-email@example.com)"
+# Leave user_agent empty to auto-generate "PaperOps/0.2 (mailto:<openalex_mailto>)".
+user_agent: ""
+# STRONGLY RECOMMENDED: your real email. It puts OpenAlex/Crossref requests in the
+# "polite pool" — without it both APIs throttle aggressively (HTTP 429).
 openalex_mailto: "your-email@example.com"
+# Optional but recommended: unauthenticated Semantic Scholar search is heavily
+# rate-limited (429). Get a free key at https://www.semanticscholar.org/product/api
 semantic_scholar_api_key: ""
 
 sources:

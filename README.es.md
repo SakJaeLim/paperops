@@ -17,19 +17,19 @@
 
 ![Pipeline de extremo a extremo de PaperOps](assets/figures/fig_pipeline.svg)
 
-PaperOps automatiza el **ciclo de vida completo de la investigación y la redacción** (recopilación de literatura, filtrado, procesamiento de PDF, extracción de evidencia, sincronización bibliográfica, edición controlada del borrador, generación reproducible de figuras y auditoría de borradores) a través de una única CLI local-first con **más de 45 comandos**.
+PaperOps automatiza el **ciclo de vida completo de la investigación y la redacción** (recopilación de literatura, filtrado, procesamiento de PDF, extracción de evidencia —heurística y asistida por LLM con verificación literal de las citas—, sincronización bibliográfica, edición controlada del borrador, generación reproducible de figuras y auditoría de borradores con validación cruzada numérica contra los resultados de los experimentos) a través de una única CLI local-first con **más de 50 comandos**.
 
-No es un redactor automático de artículos. El flujo de trabajo está automatizado, pero tres puntos de decisión críticos están reservados deliberadamente para los humanos: la adopción de evidencia, la aprobación de cambios en el borrador y la decisión de marcar algo como `verified=true`. Los mecanismos de control (guards) hacen imposible que cualquier paso automatizado falsifique estas decisiones.
+No es un redactor automático de artículos. El flujo de trabajo está automatizado, pero tres puntos de decisión críticos están reservados deliberadamente para los humanos: la adopción de evidencia, la aprobación de cambios en el borrador y la decisión de marcar algo como `verified=true`. Al estado `verified=true` solo se puede llegar mediante el comando `verify-evidence` con una atestación humana explícita, que queda registrada en un libro de verificación (verification ledger) con el que `guard-no-auto-verified` hace la comprobación cruzada: tanto las ediciones manuales como las automatizadas fallan el control.
 
 ## El ciclo de vida completo, paso a paso
 
 | Etapa | Descripción | Comandos clave | Automatización |
 |---|---|---|---|
-| 1. Recopilar | Obtener artículos de arXiv / Semantic Scholar / OpenAlex mediante perfiles temáticos | `collect`, `digest` | Automático |
+| 1. Recopilar | Obtener artículos de arXiv / Semantic Scholar / OpenAlex / Crossref mediante consultas temáticas booleanas, con cabeceras de polite pool, reintentos escalonados ante errores 429 y deduplicación entre fuentes | `collect`, `digest` | Automático |
 | 2. Clasificar | Evaluar la relevancia, filtrar por ejes de investigación y detectar brechas | `score`, `screen`, `gap`, `brief` | Automático |
 | 3. Adquirir | Descargar archivos PDF, construir fichas de lectura y esquemas | `download-pdfs`, `cards`, `outline` | Automático |
 | 4. Procesar | Convertir PDF a secciones/referencias estructuradas a través de GROBID | `parse-grobid`, `validate-grobid-artifacts` | Automático |
-| 5. Extraer | Extraer propuestas de evidencia (afirmación/cita/página) del texto procesado | `extract-evidence-candidates`, `validate-evidence-candidates` | Automático |
+| 5. Extraer | Extraer propuestas de evidencia (afirmación/cita/página) del texto procesado: de forma heurística o propuestas por un LLM, con cada cita verificada literalmente contra la fuente | `extract-evidence-candidates`, `extract-evidence-llm`, `validate-evidence-candidates` | Automático |
 | 6. Revisar | Decidir si aceptar, modificar o rechazar cada candidato | `review-evidence-candidates`, `promotion-plan` | **Filtro Humano** |
 | 7. Promover | Mover la evidencia aprobada a la Matriz de Evidencia (`verified=false`) | `promote-evidence`, `audit-promoted-evidence` | Controlado |
 | 8. Localizar | Encontrar y asociar las páginas exactas del PDF para cada cita | `locate-pdf-pages`, `apply-page-metadata` | Controlado |
@@ -37,8 +37,8 @@ No es un redactor automático de artículos. El flujo de trabajo está automatiz
 | 10. Escribir | Generar parches para el manuscrito con vista previa y diferencias (diff) | `manuscript-patch-preview` | Automático |
 | 11. Aplicar | Aplicar los parches aprobados con copia de seguridad, verificación SHA y escritura física | `apply-manuscript-patch` | **Filtro Humano** |
 | 12. Figuras | Crear figuras de Graphviz/Mermaid basadas en especificaciones, sin datos inventados | `propose-figures`, `render-figures`, `apply-figure-placeholder` | Controlado |
-| 13. Auditar | Evaluar cualquier borrador (docx/md/qmd): estructura, afirmaciones sin fuente, exageraciones y números vs. resultados reales | `audit-manuscript-draft` | Automático |
-| 14. Verificar | Garantizar que ningún proceso automático establezca `verified=true` | `guard-no-auto-verified`, `guard-paperops-overclaim`, `smoke-test` | Control automático / **Veredicto humano** |
+| 13. Auditar | Evaluar cualquier borrador (docx/md/qmd): estructura, afirmaciones sin fuente, exageraciones y validación cruzada numérica automática contra los archivos de salida de los experimentos (`--experiment-data`) | `audit-manuscript-draft` | Automático |
+| 14. Verificar | Un humano establece `verified=true` con una atestación registrada en el libro de verificación; los controles rechazan cualquier fila verificada que no tenga su entrada correspondiente en el libro | `verify-evidence`, `guard-no-auto-verified`, `guard-paperops-overclaim`, `smoke-test` | **Filtro Humano** / control automático |
 
 ## ¿Por qué usar esto en lugar de un chat de IA convencional?
 
@@ -47,8 +47,8 @@ No es un redactor automático de artículos. El flujo de trabajo está automatiz
 | ¿De dónde viene esta frase? | Desconocido | `paper_id` + `citekey` + cita + página en la Matriz de Evidencia |
 | Precisión de citas | Basada en el mejor esfuerzo | Contrastada mediante `check-citekeys` contra la bibliografía real |
 | Modificaciones del manuscrito | Sobrescritura directa | Vista previa ➔ diff ➔ aprobación ➔ aplicación verificada por SHA ➔ backup ➔ post-auditoría |
-| Estado "Verificado" | Implícito | Solo un ser humano puede establecerlo; los controles lo garantizan |
-| Números en el borrador | Sin verificar | Contrastados con los archivos reales de salida de los experimentos |
+| Estado "Verificado" | Implícito | Solo `verify-evidence --attest` puede establecerlo; el libro de verificación y los controles detectan cualquier otra vía |
+| Números en el borrador | Sin verificar | Contrastados con los archivos reales de salida de los experimentos (`audit-manuscript-draft --experiment-data`) |
 | Reproducibilidad | Limitada a la sesión | SQLite + Matrices CSV + informes de auditoría + registro de actividad + fuentes de figuras |
 
 Los patrones de diseño se sintetizaron a partir de un análisis de más de 40 herramientas de investigación de código abierto (PaperQA2, STORM, GPT Researcher, AI-Scientist, ASReview, gpt_academic, ecosistema Zotero, servidores MCP — ver `docs/03_TOOL_SYNTHESIS.md`), reensamblados bajo un principio único: **ninguna afirmación entra al manuscrito sin evidencia trazable y revisada por un humano.**
@@ -77,20 +77,22 @@ Los datos fluyen en una sola dirección con informes de auditoría en cada paso 
 
 ```bash
 git clone https://github.com/SakJaeLim/paperops.git && cd paperops
-python -m venv .venv
+python -m venv .venv   # Python 3.10+
 # En Windows: .venv\Scripts\activate | En Unix: source .venv/bin/activate
 pip install -r requirements.txt
 python scripts/paperops.py init
 python scripts/paperops.py status
 ```
 
-Funciona de inmediato sin servicios externos para: recopilación, puntuación, filtrado, auditoría de borradores, controles de seguridad y generación de figuras. Adiciones opcionales:
+A continuación, indica tu correo electrónico en `config/sources.yaml` (`openalex_mailto`): con él, las peticiones a OpenAlex/Crossref entran en sus polite pools; sin él, ambas APIs limitan el tráfico de forma agresiva (HTTP 429). Funciona de inmediato sin servicios externos para: recopilación, puntuación, filtrado, auditoría de borradores, controles de seguridad y generación de figuras. Adiciones opcionales:
 
 | Dependencia | Función | Instalación |
 |---|---|---|
 | GROBID | Procesamiento de PDF a texto estructurado | `docker run -d -p 8070:8070 lfoppiano/grobid:0.8.0` |
-| Zotero + Better BibTeX | Sincronización bibliográfica real | Descargar de zotero.org e instalar Better BibTeX |
-| Graphviz | Renderizado de figuras SVG/PNG | Descargar e instalar de graphviz.org |
+| Zotero + Better BibTeX | Sincronización bibliográfica real (archivo `.bib` exportado) | Descargar de zotero.org e instalar Better BibTeX |
+| Graphviz / Mermaid CLI | Renderizado de figuras SVG/PNG (las fuentes siempre se escriben, incluso sin ellos) | Descargar e instalar de graphviz.org |
+| Clave de API de Semantic Scholar | Recopilación fiable en S2 (sin autenticación, S2 limita el tráfico de forma agresiva) | `semantic_scholar_api_key` en `config/sources.yaml` |
+| `OPENAI_API_KEY` | `extract-evidence-llm` (extracción con LLM controlada y con verificación literal de las citas; cualquier endpoint compatible con OpenAI mediante `OPENAI_BASE_URL`) | Variable de entorno |
 
 ## Sesión típica
 
@@ -113,8 +115,12 @@ python scripts/paperops.py manuscript-patch-preview
 python scripts/paperops.py apply-manuscript-patch --from-preview <preview.csv> --dry-run
 python scripts/paperops.py apply-manuscript-patch --from-preview <preview.csv> --apply
 
-# Auditar tu propio borrador (docx/md/qmd)
-python scripts/paperops.py audit-manuscript-draft --input mi_borrador_de_tesis.docx
+# Auditar tu propio borrador (docx/md/qmd) — estructura, afirmaciones sin fuente, exageraciones
+# y validación cruzada numérica automática contra tus archivos de salida de los experimentos
+python scripts/paperops.py audit-manuscript-draft --input mi_borrador_de_tesis.docx --experiment-data data/experiment_outputs
+
+# Verificación humana (EL filtro) — registrada en el libro de verificación
+python scripts/paperops.py verify-evidence --evidence-id ev_xxxx --by "Tu Nombre" --note "revisado p.3" --attest
 
 # Renderizar figuras y verificaciones finales
 python scripts/paperops.py render-figures
@@ -126,15 +132,16 @@ python scripts/paperops.py smoke-test
 
 ## La auditoría en la práctica
 
-El comando `audit-manuscript-draft` se utilizó en un borrador de tesis real (413 párrafos): escaneó 378 oraciones, verificó la estructura del capítulo, señaló afirmaciones fuertes sin fuente y lenguaje exagerado, y realizó una validación cruzada de **los 178 valores numéricos** del borrador contra los archivos reales de salida de los experimentos — 0 discrepancias, con 2 diferencias de redondeo explicadas y 1 tasa base recalculada a partir de los registros de predicción.
+El comando `audit-manuscript-draft` se utilizó en un manuscrito KCI real (413 párrafos): escaneó 378 oraciones, verificó la estructura del capítulo, señaló afirmaciones fuertes sin fuente y lenguaje exagerado, y **los 178 valores numéricos** del borrador se contrastaron con los archivos reales de salida de los experimentos — 0 discrepancias, con 2 diferencias de redondeo explicadas y 1 tasa base recalculada a partir de los registros de predicción. (En aquel momento esa validación cruzada se hizo de forma manual; desde la v0.2.0 la opción `--experiment-data` la realiza automáticamente e informa, para cada número, de si hay coincidencia exacta, coincidencia por redondeo o si no se encuentra en los datos.)
 
 ## Reglas de gobernanza
 
-1. La Matriz de Evidencia nunca se modifica de forma casual.
-2. `verified=true` nunca se establece automáticamente: no existe una transición automatizada hacia el estado verificado.
-3. La alineación de cita/página es una comprobación de correspondencia de fuentes, no una validación de la verdad absoluta.
-4. Las modificaciones al manuscrito ocurren únicamente a través de la aplicación controlada con copias de seguridad e informes posteriores.
-5. Los hallazgos de trabajos relacionados se presentan como patrones de diseño, nunca como evidencia de rendimiento para el propio PaperOps.
+1. La Matriz de Evidencia nunca se modifica de forma casual; todas las reescrituras son atómicas (archivo temporal + renombrado) y van acompañadas de copias de seguridad con marca de tiempo.
+2. `verified=true` nunca se establece automáticamente. La única vía autorizada es `verify-evidence --attest`, que registra quién, cuándo y cómo en `matrices/verification_ledger.csv`; `guard-no-auto-verified` rechaza cualquier fila verificada que no tenga su atestación correspondiente en el libro.
+3. Los candidatos extraídos por un LLM se contrastan literalmente con el texto fuente procesado — las citas parafraseadas o inventadas se descartan y se reportan — y después pasan por los mismos filtros de revisión humana que los candidatos heurísticos.
+4. La alineación de cita/página es una comprobación de correspondencia de fuentes, no una validación de la verdad absoluta.
+5. Las modificaciones al manuscrito ocurren únicamente a través de la vista previa y la aplicación controladas, con copias de seguridad (almacenadas fuera del árbol controlado), verificaciones SHA-256 y control + smoke-test posteriores a la aplicación; los informes de aprobación se contrastan con el SHA-256 actual del manuscrito, de modo que se rechazan los informes obsoletos o falsificados.
+6. Los hallazgos de trabajos relacionados se presentan como patrones de diseño, nunca como evidencia de rendimiento para el propio PaperOps.
 
 ## Lo que este repositorio NO incluye
 
@@ -142,10 +149,13 @@ Código, configuraciones, documentos de diseño y fuentes de figuras únicamente
 
 ## Limitaciones honestas
 
-- La extracción de evidencia se basa actualmente en reglas/heurísticas; un extractor asistido por LLM es una etapa planificada por separado.
-- La auditoría de borradores es un filtrado heurístico para revisión humana, no una validación de la verdad.
+- El extractor con LLM solo garantiza que las citas sean literales; la calidad de la *selección* de afirmación y cita sigue dependiendo del modelo, y cada candidato sigue requiriendo revisión humana.
+- La auditoría de borradores es un filtrado heurístico para revisión humana, no una validación de la verdad; la validación cruzada numérica comprueba que los números aparecen en tus archivos de datos, no que el análisis sea correcto.
 - El acoplamiento de citas y páginas no valida la veracidad de una afirmación, por diseño.
 - Las figuras con resultados cuantitativos nunca se generan sin un archivo de datos real que las respalde.
+- La recopilación en Semantic Scholar sin autenticación está fuertemente limitada por S2; en la práctica, esa fuente requiere una clave de API gratuita.
+- El libro de verificación disuade de la verificación automatizada accidental o descuidada; no es un mecanismo criptográfico y no puede impedir que una persona decidida falsifique atestaciones en sus propios archivos locales.
+- Los README en idiomas distintos del inglés pueden ir una versión por detrás del inglés; el README en inglés y el CHANGELOG son la referencia autoritativa.
 
 ## Licencia
 

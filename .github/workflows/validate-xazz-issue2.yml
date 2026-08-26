@@ -1,0 +1,44 @@
+name: Validate Xazz Issue 2 Guardrail
+
+on:
+  push:
+    branches:
+      - ci/xazz-issue2-guardrail-validation
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Extract isolated fixture
+        run: |
+          mkdir -p _fixture
+          tar -xzf xazz_issue2_fixture.tar.gz -C _fixture
+      - name: Format
+        working-directory: _fixture
+        run: cargo fmt --all
+      - name: Test
+        working-directory: _fixture
+        run: cargo test --all-targets
+      - name: Clippy
+        working-directory: _fixture
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Upload formatted validated source
+        uses: actions/upload-artifact@v4
+        with:
+          name: xazz-issue2-formatted-source
+          path: |
+            _fixture/Cargo.toml
+            _fixture/src
+          if-no-files-found: error

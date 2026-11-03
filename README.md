@@ -1,5 +1,9 @@
 # PaperOps — Evidence-first Research & Thesis Writing OS
 
+Try the offline portfolio walkthrough: `python scripts/demo_public.py`.
+It audits synthetic claims and checks that verification still requires attestation.
+No API key or private manuscript is needed. [Demo guide](docs/PUBLIC_DEMO.md).
+
 <details align="right">
   <summary>🌐 Language Translation / Language Selection</summary>
   <br />

@@ -1,5 +1,9 @@
 # PaperOps — 근거 우선(Evidence-first) 연구·논문 작성 OS
 
+공개 데모: `python scripts/demo_public.py`를 실행하면 가상 원고의 수치와
+출처 없는 주장을 점검하고, 확인 없이 근거를 검증 완료 처리할 수 없는지
+확인합니다. API 키나 비공개 원고는 필요하지 않습니다. [데모 안내](docs/PUBLIC_DEMO.md).
+
 <details align="right">
   <summary>🌐 Language Translation / 언어 선택</summary>
   <br />

@@ -33,6 +33,8 @@ DIST = ROOT / 'dist/public_release'
 
 # (source, destination-inside-release)
 WHITELIST_FILES = [
+    ('scripts/demo_public.py', 'scripts/demo_public.py'),
+    ('docs/PUBLIC_DEMO.md', 'docs/PUBLIC_DEMO.md'),
     ('scripts/paperops.py', 'scripts/paperops.py'),
     ('scripts/paperops_figures.py', 'scripts/paperops_figures.py'),
     ('scripts/paperops_draft_audit.py', 'scripts/paperops_draft_audit.py'),
@@ -213,7 +215,7 @@ def sanitize_configs(dist=None):
                     USER_AGENT_KEY_RE.match(key) and EMAIL_RE.search(value))
                 if sensitive and not BLANK_VALUE_RE.match(value.strip()):
                     out.append(f'{indent}{key}: ""')
-                    redactions.append((str(path.relative_to(dist)), key))
+                    redactions.append((path.relative_to(dist).as_posix(), key))
                     changed = True
                     continue
             out.append(line)
